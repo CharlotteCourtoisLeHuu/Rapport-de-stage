@@ -1,0 +1,1465 @@
+---
+title: "LLS_construit_quartier"
+author: "Charlotte Courtois Le-Huu"
+date: "2023-07-24"
+output: html_document
+---
+
+Le premier objectif de ce code est de caractériser les quartiers IRIS dans lesquels sont construits des logements sociaux en réponse à la loi SRU. Le second but du code est de caractériser les logements construits en réponse à la loi SRU.
+
+```{r}
+library(readr)
+library(dplyr)
+library(sqldf)
+library(weights)
+```
+
+
+
+```{r chargement données}
+# Les logements sociaux du parc HLM en 2021
+geoloc2021_decret <- read.csv(
+  "/data/user/g/fgoffette/VenteHLM/donnees_brutes/rpls/geoloc2021_decret.csv", 
+  sep = ';')
+
+# les logements sociaux du parc HLM en 2019
+# problème avec la lecture du fichier
+#geoloc2019_decret <- read.csv(
+#  "/data/user/g/fgoffette/VenteHLM/donnees_brutes/rpls/geoloc2019_decret.csv", 
+#  sep = ';')
+
+# Les communes soumises à la loi SRU
+communes_soumises_SRU <- read.csv(
+  "../donnees_resultat/communes_soumises_SRU.csv")
+
+# Les codes des arrondissement de Marseille, Lyon et Paris
+arrondissements = c()
+arrondissements$code = c(13201:13216, 69381:69389, 75101:75120)
+arrondissements = as.data.frame(arrondissements)
+
+# Les données de population 2019 INSEE selon les quartiers IRIS
+pop_2019 <- read.csv("../donnees_initiales/base-ic-evol-struct-pop-2019.CSV",
+                     sep = ";")
+
+# Les données de logements 2019 INSEE selon les quartiers IRIS
+log_2019 <- read.csv("../donnees_initiales/base-ic-logement-2019.CSV", 
+                     sep = ";")
+
+ls_reponse = readRDS("../donnees_resultat/logements_reponse_SRU.rds")
+```
+
+```{r donnees INSEE 2019 réunies}
+pop_log_2019 <- 
+  left_join(pop_2019, log_2019,
+            by = c("IRIS", "COM", "TYP_IRIS", "MODIF_IRIS", "LAB_IRIS", "P19_PMEN"))
+length(pop_log_2019$IRIS)
+```
+Il y a 49282 quartiers IRIS dans toute la France.
+
+```{r donnees logements IRIS}
+# On sélectionne les colonnes qui nous intéresse dans les logements concernés par la loi SRU
+ls_reponse <- ls_reponse[, c("IDENT_REP", # code du logement dans le fichier RPLS
+                             "DEPCOM", # code de la commune
+                             "CONSTRUCT", # année de construction
+                             "FINAN", # type de LS
+                             "LOYERPRINC", "LOYERACC", # loyer
+                             "loymoy", 
+                             "SURFHAB", # la surface habitable
+                             "PLG_IRIS2021", # code quartier IRIS
+                             "QUALITE_IRIS",
+                             "NBPIECE")] # nombre de pièce du logement'
+
+# On concatène les codes des communes et des quartiers IRIS
+# pour avoir le code du quartier en entier
+ls_reponse$quartier_iris <- paste(ls_reponse$DEPCOM, ls_reponse$PLG_IRIS2021,
+                                  sep = "")
+
+# changements des arrondissements en communes
+# Marseille
+ls_reponse$DEPCOM[ls_reponse$DEPCOM %in% 13201:13216] <- 13055
+# Lyon
+ls_reponse$DEPCOM[ls_reponse$DEPCOM %in% 69381:69389] <- 69123
+# Paris
+ls_reponse$DEPCOM[ls_reponse$DEPCOM %in% 75101:75120] <- 75056
+
+print(c("Nombre de logements :", length(ls_reponse$DEPCOM)))
+print(c("Nombre de communes :" , length(table(ls_reponse$DEPCOM))))
+
+# Lorsque les communes ne sont pas divisées en quartier IRIS,
+# elles sont notées CSZ dans le fichier RPLS et
+# elles sont notées 0000 dans le fichier de la population IRIS.
+ls_reponse$PLG_IRIS2021[ls_reponse$PLG_IRIS2021 == 'CSZ'] = '0000'
+#geoloc2021$PLG_IRIS2021[is.na(geoloc2021$PLG_IRIS2021)] = '0000
+```
+
+```{r moyenne et médiane par commune}
+mydb <- dbConnect(RSQLite::SQLite(), "")
+dbWriteTable(mydb, "communes_soumises_SRU", communes_soumises_SRU)
+dbWriteTable(mydb, "arrondissements", arrondissements)
+dbWriteTable(mydb, "geoloc2021_decret", geoloc2021_decret)
+
+LOYERCOM <- # les loyers moyen et médian des LS des communes
+  dbGetQuery(mydb, "
+        SELECT DEPCOM,
+        AVG(LOYERPRINC) \"LOYERCOM_MOY\", 
+        MEDIAN(LOYERPRINC) \"LOYERCOM_MED\",
+        COUNT(DEPCOM)
+        FROM geoloc2021_decret
+        WHERE DEPCOM IN (SELECT code_commune FROM communes_soumises_SRU
+                         UNION
+                         SELECT code FROM arrondissements)
+        GROUP BY DEPCOM
+        ")
+dbDisconnect(mydb)
+
+# changements des arrondissements en communes
+# Marseille
+LOYERCOM$DEPCOM[LOYERCOM$DEPCOM %in% 13201:13216] <- 13055
+# Lyon
+LOYERCOM$DEPCOM[LOYERCOM$DEPCOM %in% 69381:69389] <- 69123
+# Paris
+LOYERCOM$DEPCOM[LOYERCOM$DEPCOM %in% 75101:75120] <- 75056
+```
+
+
+
+# Caractèrisation des quartiers
+```{r caractèrisation des quartiers}
+pop_log_2019$taux_ages65P <-
+  pop_log_2019$P19_POP65P / pop_log_2019$P19_POP
+
+pop_log_2019$taux_moins20ans <-
+  pop_log_2019$P19_POP0019 / pop_log_2019$P19_POP
+```
+
+```{r les informations des quartiers IRIS ajoutés aux logements}
+LS_IRIS <- left_join(ls_reponse, pop_log_2019, by = c("quartier_iris" = "IRIS"))
+#sqldf("SELECT *
+ #      FROM geoloc2021 g LEFT JOIN 
+  #          pop_log_2019 p ON(g.quartier_iris = p.IRIS)")
+```
+
+```{r territoire SRU}
+#communes qui ont fait partie du territoire SRU à un moment
+communes_territoire_SRU <- 
+  read.csv("../donnees_resultat/LLS_par_commune.csv")$code_commune
+```
+
+```{r}
+# quartiers IRIS du territoire SRU (même les communes non soumises)
+pop_log_2019_terrsru <- 
+  pop_log_2019[pop_log_2019$COM %in% c(communes_territoire_SRU, 
+                                       arrondissements),]
+
+# quartiers IRIS des communes soumises au moins une fois à la loi SRU
+pop_log_2019_cososru <- 
+  pop_log_2019[pop_log_2019$COM %in% c(communes_soumises_SRU$code_commune, 
+                                       arrondissements),]
+```
+
+```{r}
+couleur_france = 'darkmagenta'
+couleur_territoiresru = 'plum'
+couleur_communessru = 'mediumpurple'
+couleur_hist = 'midnightblue'
+couleur_quartiersru = 'navy'
+couleur_hist_quartiersru = 'forestgreen' 
+```
+
+## Cadres
+
+```{r calcul taux cadre}
+pop_log_2019$taux_cadre <-
+  pop_log_2019$C19_POP15P_CS3 / pop_log_2019$C19_POP15P
+pop_log_2019_terrsru$taux_cadre <-
+  pop_log_2019_terrsru$C19_POP15P_CS3 / pop_log_2019_terrsru$C19_POP15P
+pop_log_2019_cososru$taux_cadre <-
+  pop_log_2019_cososru$C19_POP15P_CS3 / pop_log_2019_cososru$C19_POP15P
+
+LS_IRIS$taux_cadre <-
+  LS_IRIS$C19_POP15P_CS3 / LS_IRIS$C19_POP15P
+```
+Le nombre de cadres apparaît dans 49112 quartiers, dont 19792 dans le territoire SRU et 6593 dans les communes soumises à la loi SRU.
+
+```{r}
+# pour toute la France (un poids par quartier)
+length(pop_log_2019$taux_cadre[is.na(pop_log_2019$taux_cadre) == 0])
+# le nombre de cadres apparait dans 49112 quartiers IRIS (il en manque 170)
+
+par(mfrow=c(3,2), oma = c(0, 0, 2, 0), mar = c(2, 2, 1, 1))
+plot(density(pop_log_2019$taux_cadre[is.na(pop_log_2019$taux_cadre) == 0]),
+     main = "En France, par quartier", lty = 3,
+     col = couleur_france, lwd = 3, cex.main = 1)
+hist(pop_log_2019$taux_cadre, col = couleur_hist, density = 25,
+     add = TRUE, freq = F)
+
+# pour toute la France (un poids par RP)
+taux_cadre_france <-
+  density(pop_log_2019$taux_cadre[is.na(pop_log_2019$taux_cadre) == 0],
+        weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_cadre) == 0]/
+          sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_cadre) == 0]))
+
+plot(taux_cadre_france, lty = 3,
+     main = "En France, par logement",
+     col = couleur_france, lwd = 3, cex.main = 1)
+wtd.hist(x = pop_log_2019$taux_cadre[is.na(pop_log_2019$taux_cadre) == 0], 
+         weight = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_cadre) == 0]/
+          sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_cadre) == 0]),
+         col = couleur_hist, density = 25,
+         add = TRUE, freq = F)
+
+# pour le territoire SRU (un poids par quartier)
+plot(density(pop_log_2019_terrsru$taux_cadre[is.na(pop_log_2019_terrsru$taux_cadre) == 0]),
+     main = "Dans le territoire SRU, par quartier",
+     col = couleur_territoiresru, lwd = 3, cex.main = 1)
+hist(pop_log_2019_terrsru$taux_cadre, col = couleur_hist, density = 25,
+     add = TRUE, freq = F)
+
+# pour le territoire SRU (un poids par RP)
+taux_cadre_terrsru <-
+  density(pop_log_2019_terrsru$taux_cadre[is.na(pop_log_2019_terrsru$taux_cadre) == 0],
+        weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_cadre) == 0]/
+          sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_cadre) == 0]))
+
+plot(taux_cadre_terrsru,
+     main = "Dans le territoire SRU, par logement",
+     col = couleur_territoiresru, lwd = 3, cex.main = 1)
+wtd.hist(x = pop_log_2019_terrsru$taux_cadre[is.na(pop_log_2019_terrsru$taux_cadre) == 0], 
+         weight = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_cadre) == 0]/
+          sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_cadre) == 0]),
+         col = couleur_hist, density = 25,
+         add = TRUE, freq = F)
+
+# pour les communes soumises SRU (un poids par quartier)
+plot(density(pop_log_2019_cososru$taux_cadre[is.na(pop_log_2019_cososru$taux_cadre) == 0]),
+     main = "Dans les communes soumises, par quartier", lty = 5,
+     col = couleur_communessru, lwd = 3, cex.main = 1)
+hist(pop_log_2019_cososru$taux_cadre, col = couleur_hist, density = 25,
+     add = TRUE, freq = F)
+
+# pour les communes soumises SRU (un poids par RP)
+taux_cadre_cososru <-
+  density(pop_log_2019_cososru$taux_cadre[is.na(pop_log_2019_cososru$taux_cadre) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_cadre) == 0]/
+          sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_cadre) == 0]))
+
+plot(taux_cadre_cososru, lty = 5,
+     main = "Dans les communes soumises, par logement",
+     col = couleur_communessru, lwd = 3, cex.main = 1)
+wtd.hist(x = pop_log_2019_cososru$taux_cadre[is.na(pop_log_2019_cososru$taux_cadre) == 0], 
+         weight = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_cadre) == 0]/
+          sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_cadre) == 0]),
+         col = couleur_hist, density = 25,
+         add = TRUE, freq = F)
+title(main = "Taux de cadres dans les quartiers IRIS", outer = TRUE)
+```
+
+### Cadres dans les logements construits pour la loi SRU
+```{r}
+# un poids par logement
+densite_cadres_iris <- density(
+  pop_log_2019$taux_cadre[is.na(pop_log_2019$taux_cadre) == 0],
+  weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_cadre) == 0]/
+    sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_cadre) == 0]))
+
+plot(density(LS_IRIS$taux_cadre[is.na(LS_IRIS$taux_cadre) == 0]), col = couleur_quartiersru,
+     main = "Taux de cadres dans les LS construits entre 2002 et 2020",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_cadre, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = couleur_hist_quartiersru, density = 25, breaks = 0:20*0.05)
+
+plot(taux_cadre_terrsru, col = couleur_territoiresru, lty = 1, lwd = 2,
+     main = "Densités des taux de cadres dans les quartiers IRIS")
+lines(taux_cadre_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_cadre[is.na(LS_IRIS$taux_cadre) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', 
+       legend = c('territoire SRU', 'communes soumises', 'quartiers concernés par SRU'),
+       lty = c(1, 5, 6), lwd = 2, col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+
+## Etrangers et immigrés
+
+```{r calcul taux etrangers et immigrés}
+pop_log_2019$taux_etrangersImmigres <-
+  (pop_log_2019$P19_POP_ETR + pop_log_2019$P19_POP_IMM) / 
+  (pop_log_2019$P19_POP_FR + pop_log_2019$P19_POP_ETR + 
+     pop_log_2019$P19_POP_IMM)
+pop_log_2019_terrsru$taux_etrangersImmigres <-
+  (pop_log_2019_terrsru$P19_POP_ETR + pop_log_2019_terrsru$P19_POP_IMM) / 
+  (pop_log_2019_terrsru$P19_POP_FR + pop_log_2019_terrsru$P19_POP_ETR + 
+     pop_log_2019_terrsru$P19_POP_IMM)
+pop_log_2019_cososru$taux_etrangersImmigres <-
+  (pop_log_2019_cososru$P19_POP_ETR + pop_log_2019_cososru$P19_POP_IMM) / 
+  (pop_log_2019_cososru$P19_POP_FR + pop_log_2019_cososru$P19_POP_ETR + 
+     pop_log_2019_cososru$P19_POP_IMM)
+
+LS_IRIS$taux_etrangersImmigres <-
+  (LS_IRIS$P19_POP_ETR + LS_IRIS$P19_POP_IMM) / (LS_IRIS$P19_POP_FR + LS_IRIS$P19_POP_ETR + LS_IRIS$P19_POP_IMM)
+
+length(pop_log_2019$P19_POP_ETR[is.na(pop_log_2019$P19_POP_ETR) == 0])
+length(pop_log_2019$P19_POP_IMM[is.na(pop_log_2019$P19_POP_IMM) == 0])
+length(pop_log_2019$P19_POP_FR[is.na(pop_log_2019$P19_POP_FR) == 0])
+# le nombre d'étrangers apparait dans ous les quartiers 
+```
+
+```{r}
+# vérification valeur aberrante
+pop_log_2019[pop_log_2019$taux_etrangersImmigres > 1 & is.na(pop_log_2019$taux_etrangersImmigres) == 0,]
+```
+
+Les nombres d'étrangers, de français et d'immigrés apparraissent dans tous les quartiers, mais pour certains quartiers il n'y a pas d'habitant, ainsi il n'est pas possible de calculer les taux d'étrangers et d'immigrés.
+
+```{r étrangers et immigrés toute la France quartier}
+# pour toute la France (un poids par quartier)
+length(pop_log_2019$taux_etrangersImmigres[is.na(pop_log_2019$taux_etrangersImmigres) == 0])
+# le taux d'immigrés et d'étrangers apparait dans 49134 quartiers IRIS (il en manque 148)
+
+par(mfrow=c(3,2), oma = c(0, 0, 2, 0), mar = c(2, 2, 1, 1))
+
+plot(density(pop_log_2019$taux_etrangersImmigres[is.na(pop_log_2019$taux_etrangersImmigres) == 0]),
+     main = "En France, par quartier", cex.main = 1,
+     col = couleur_france, lwd = 3, lty = 3)
+hist(pop_log_2019$taux_etrangersImmigres, col = couleur_hist, density = 25,
+     add = TRUE, freq = F)
+
+# pour toute la France (un poids par RP)
+taux_etrangersImmigres_france <-
+  density(pop_log_2019$taux_etrangersImmigres[is.na(pop_log_2019$taux_etrangersImmigres) == 0],
+        weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_etrangersImmigres) == 0]/
+          sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_etrangersImmigres) == 0]))
+
+plot(taux_etrangersImmigres_france, lty = 3, cex.main = 1,
+     main = "En France, par logement",
+     col = couleur_france, lwd = 3)
+wtd.hist(x = pop_log_2019$taux_etrangersImmigres[is.na(pop_log_2019$taux_etrangersImmigres) == 0], 
+         weight = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_etrangersImmigres) == 0]/
+          sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_etrangersImmigres) == 0]),
+         col = couleur_hist, density = 25,
+         add = TRUE, freq = F)
+
+# pour le territoire SRU (un poids par quartier)
+plot(density(pop_log_2019_terrsru$taux_etrangersImmigres[is.na(pop_log_2019_terrsru$taux_etrangersImmigres) == 0]),
+     main = "Dans le territoire SRU, par quartier", cex.main = 1,
+     col = couleur_territoiresru, lwd = 3)
+hist(pop_log_2019_terrsru$taux_etrangersImmigres, col = couleur_hist, density = 25,
+     add = TRUE, freq = F)
+
+# pour le territoire SRU (un poids par RP)
+taux_etrangersImmigres_terrsru <-
+  density(pop_log_2019_terrsru$taux_etrangersImmigres[is.na(pop_log_2019_terrsru$taux_etrangersImmigres) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_etrangersImmigres) == 0]/
+          sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_etrangersImmigres) == 0]))
+
+plot(taux_etrangersImmigres_terrsru, cex.main = 1,
+     main = "Dans le territoire SRU, par logement",
+     col = couleur_territoiresru, lwd = 3)
+wtd.hist(x = pop_log_2019_terrsru$taux_etrangersImmigres[is.na(pop_log_2019_terrsru$taux_etrangersImmigres) == 0], 
+         weight = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_etrangersImmigres) == 0]/
+          sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_etrangersImmigres) == 0]),
+         col = couleur_hist, density = 25,
+         add = TRUE, freq = F)
+
+# pour les communes soumises SRU (un poids par quartier)
+plot(density(pop_log_2019_cososru$taux_etrangersImmigres[is.na(pop_log_2019_cososru$taux_etrangersImmigres) == 0]),
+     main = "Dans les communes soumises, par quartier", cex.main = 1,
+     col = couleur_communessru, lwd = 3, lty = 5)
+hist(pop_log_2019_cososru$taux_etrangersImmigres, col = couleur_hist, density = 25,
+     add = TRUE, freq = F, breaks = 0:20*0.05)
+
+# pour les communes soumises SRU (un poids par RP)
+taux_etrangersImmigres_cososru <-
+  density(pop_log_2019_cososru$taux_etrangersImmigres[is.na(pop_log_2019_cososru$taux_etrangersImmigres) == 0],
+        weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_etrangersImmigres) == 0]/
+          sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_etrangersImmigres) == 0]))
+
+plot(taux_etrangersImmigres_cososru, lty = 5, cex.main = 1,
+     main = "Dans les communes soumises, par logement",
+     col = couleur_communessru, lwd = 3)
+wtd.hist(x = pop_log_2019_cososru$taux_etrangersImmigres[is.na(pop_log_2019_cososru$taux_etrangersImmigres) == 0], 
+         weight = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_etrangersImmigres) == 0]/
+          sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_etrangersImmigres) == 0]),
+         col = couleur_hist, density = 25, breaks = 20,
+         add = TRUE, freq = F)
+
+title(main = "Taux d'étrangers et d'immigrés dans les quartiers IRIS",
+      outer = TRUE)
+```
+
+
+### Etrangers et immigrés dans les logements construits pour la loi SRU
+```{r}
+# un poids par logement
+plot(density(LS_IRIS$taux_etrangersImmigres[is.na(
+     LS_IRIS$taux_etrangersImmigres) == 0]), col = couleur_quartiersru,
+     main = "Taux d'étrangers et d'immigrés dans les IRIS des logements réponse",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_etrangersImmigres, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = couleur_hist_quartiersru, density = 25, breaks = 0:20*0.05)
+
+plot(taux_etrangersImmigres_terrsru, col = couleur_territoiresru, lty = 1, 
+     lwd = 2, ylim = c(0, 5),
+     main = "Densités des taux d'étrangers et d'immigrés dans les quartiers IRIS")
+lines(taux_etrangersImmigres_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_etrangersImmigres[is.na(LS_IRIS$taux_etrangersImmigres) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', 
+       legend = c('territoire SRU', 'communes soumises', 
+                  'quartiers concernés par SRU'),
+       lty = c(1, 5, 6), lwd = 2, 
+       col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+
+
+## Logements récents ou anciens ?
+
+```{r Nombre de logements en fonction de l anciennete et du quartier IRIS}
+par(mfrow = c(3, 2), oma = c(0, 9, 0, 9), mar = c(2, 3, 3, 2))
+hist(pop_log_2019$P19_RP_ACH19) # Nombre de résidences principales construites avant 1919
+hist(pop_log_2019$P19_RP_ACH45) # Nombre de résidences principales construites entre 1919 et 1945
+hist(pop_log_2019$P19_RP_ACH70) # Nombre de résidences principales construites entre 1946 et 1970
+hist(pop_log_2019$P19_RP_ACH90) # Nombre de résidences principales construites entre 1970 et 1990
+hist(pop_log_2019$P19_RP_ACH05) # Nombre de résidences principales construites entre 1991 et 2005
+hist(pop_log_2019$P19_RP_ACH15) # Nombre de résidences principales construites entre 2006 et 2015
+```
+
+```{r calcul des taux de construction avant 1919}
+pop_log_2019$taux_av19 <-
+  pop_log_2019$P19_RP_ACH19 / pop_log_2019$P19_RP_ACHTOT
+pop_log_2019_terrsru$taux_av19 <-
+  pop_log_2019_terrsru$P19_RP_ACH19 / pop_log_2019_terrsru$P19_RP_ACHTOT
+pop_log_2019_cososru$taux_av19 <-
+  pop_log_2019_cososru$P19_RP_ACH19 / pop_log_2019_cososru$P19_RP_ACHTOT
+
+LS_IRIS$taux_av19 <-
+  LS_IRIS$P19_RP_ACH19 / LS_IRIS$P19_RP_ACHTOT
+```
+
+```{r calcul des taux de constructions avant 1919}
+pop_log_2019$taux_av19 <-
+  pop_log_2019$P19_RP_ACH19 / pop_log_2019$P19_RP_ACHTOT
+pop_log_2019_terrsru$taux_av19 <-
+  pop_log_2019_terrsru$P19_RP_ACH19 / pop_log_2019_terrsru$P19_RP_ACHTOT
+pop_log_2019_cososru$taux_av19 <-
+  pop_log_2019_cososru$P19_RP_ACH19 / pop_log_2019_cososru$P19_RP_ACHTOT
+
+LS_IRIS$taux_av19 <-
+  LS_IRIS$P19_RP_ACH19 / LS_IRIS$P19_RP_ACHTOT
+```
+
+```{r calcul des taux de constructions entre 1919 et 1945}
+pop_log_2019$taux_19_45 <-
+  pop_log_2019$P19_RP_ACH45 / pop_log_2019$P19_RP_ACHTOT
+pop_log_2019_terrsru$taux_19_45 <-
+  pop_log_2019_terrsru$P19_RP_ACH45 / pop_log_2019_terrsru$P19_RP_ACHTOT
+pop_log_2019_cososru$taux_19_45 <-
+  pop_log_2019_cososru$P19_RP_ACH45 / pop_log_2019_cososru$P19_RP_ACHTOT
+
+LS_IRIS$taux_19_45 <-
+  LS_IRIS$P19_RP_ACH45 / LS_IRIS$P19_RP_ACHTOT
+```
+
+```{r calcul des taux de constructions entre 1946 et 1970}
+pop_log_2019$taux_46_70 <-
+  pop_log_2019$P19_RP_ACH70 / pop_log_2019$P19_RP_ACHTOT
+pop_log_2019_terrsru$taux_46_70 <-
+  pop_log_2019_terrsru$P19_RP_ACH70 / pop_log_2019_terrsru$P19_RP_ACHTOT
+pop_log_2019_cososru$taux_46_70 <-
+  pop_log_2019_cososru$P19_RP_ACH70 / pop_log_2019_cososru$P19_RP_ACHTOT
+
+LS_IRIS$taux_46_70 <-
+  LS_IRIS$P19_RP_ACH70 / LS_IRIS$P19_RP_ACHTOT
+```
+
+```{r calcul des taux de constructions entre 1971 et 1990}
+pop_log_2019$taux_71_90 <-
+  pop_log_2019$P19_RP_ACH90 / pop_log_2019$P19_RP_ACHTOT
+pop_log_2019_terrsru$taux_71_90 <-
+  pop_log_2019_terrsru$P19_RP_ACH90 / pop_log_2019_terrsru$P19_RP_ACHTOT
+pop_log_2019_cososru$taux_71_90 <-
+  pop_log_2019_cososru$P19_RP_ACH90 / pop_log_2019_cososru$P19_RP_ACHTOT
+
+LS_IRIS$taux_71_90 <-
+  LS_IRIS$P19_RP_ACH90 / LS_IRIS$P19_RP_ACHTOT
+```
+
+```{r calcul des taux de constructions entre 1991 et 2005}
+pop_log_2019$taux_91_05 <-
+  pop_log_2019$P19_RP_ACH05 / pop_log_2019$P19_RP_ACHTOT
+pop_log_2019_terrsru$taux_91_05 <-
+  pop_log_2019_terrsru$P19_RP_ACH05 / pop_log_2019_terrsru$P19_RP_ACHTOT
+pop_log_2019_cososru$taux_91_05 <-
+  pop_log_2019_cososru$P19_RP_ACH05 / pop_log_2019_cososru$P19_RP_ACHTOT
+
+LS_IRIS$taux_91_05 <-
+  LS_IRIS$P19_RP_ACH05 / LS_IRIS$P19_RP_ACHTOT
+```
+
+```{r calcul des taux de constructions entre 2006 et 2015}
+pop_log_2019$taux_06_15 <-
+  pop_log_2019$P19_RP_ACH15 / pop_log_2019$P19_RP_ACHTOT
+pop_log_2019_terrsru$taux_06_15 <-
+  pop_log_2019_terrsru$P19_RP_ACH15 / pop_log_2019_terrsru$P19_RP_ACHTOT
+pop_log_2019_cososru$taux_06_15 <-
+  pop_log_2019_cososru$P19_RP_ACH15 / pop_log_2019_cososru$P19_RP_ACHTOT
+
+LS_IRIS$taux_06_15 <-
+  LS_IRIS$P19_RP_ACH15 / LS_IRIS$P19_RP_ACHTOT
+```
+
+### Ancienneté des logements dans toute la France
+```{r ancienneté toute la France quartier}
+# Sur l'ensemble des quartiers (un poids par quartier)
+par(mfrow=c(3,2), oma = c(0, 0, 2, 0), mar = c(2, 2, 1, 1))
+# Taux de résidences principales construites avant 1919
+hist(pop_log_2019$taux_av19, cex.main = 1,
+     main = "Construits avant 1919", xlab = "taux de résidences principales",
+     col = "navajowhite")
+# Taux de résidences principales construites entre 1919 et 1945
+hist(pop_log_2019$taux_19_45, cex.main = 1,
+     main = "Construits entre 1919 et 1945", col = "lightskyblue1",
+     xlab = "taux de résidences principales") 
+# Taux de résidences principales construites entre 1946 et 1970
+hist(pop_log_2019$taux_46_70, cex.main = 1,
+     main = "Construits entre 1946 et 1970", col = "palegreen",
+     xlab = "taux de résidences principales") 
+# Taux de résidences principales construites entre 1971 et 1990
+hist(pop_log_2019$taux_71_90, cex.main = 1,
+     main = "Construits entre 1971 et 1990", col = "pink",
+     xlab = "taux de résidences principales")
+# Taux de résidences principales construites entre 1991 et 2005
+hist(pop_log_2019$taux_91_05, cex.main = 1,
+     main = "Construits entre 1991 et 2005", col = couleur_territoiresru,
+     xlab = "taux de résidences principales") 
+# Taux de résidences principales construites entre 2006 et 2015
+hist(pop_log_2019$taux_06_15, cex.main = 1,
+     main = "Construits entre 2006 et 2015", col = "snow",
+     xlab = "taux de résidences principales") 
+
+title("Taux des dates de constructions de logements des quartiers IRIS",
+      outer = TRUE)
+```
+
+```{r ancienneté toute la France logement}
+# Sur l'ensemble des quartiers (un poids par logement)
+par(mfrow = c(3, 2), oma = c(0, 9, 2, 9), mar = c(2, 2, 2, 2))
+# Taux de résidences principales construites avant 1919
+taux_ancien_av19_france <-
+  density(pop_log_2019$taux_av19[is.na(pop_log_2019$taux_av19) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_av19) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_av19) == 0]))
+plot(taux_ancien_av19_france, col = couleur_france, lwd = 1.5, cex.main = 1,
+     main = "Construits avant 1919", lty = 3)
+wtd.hist(x = pop_log_2019$taux_av19[is.na(pop_log_2019$taux_av19) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_av19) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_av19) == 0]),
+         col = "navajowhite", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1919 et 1945
+taux_ancien_19_45_france <-
+  density(pop_log_2019$taux_19_45[is.na(pop_log_2019$taux_19_45) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_19_45) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_19_45) == 0]))
+plot(taux_ancien_19_45_france, col = couleur_france, lwd = 1.5, cex.main = 1,
+     main = "Construits entre 1919 et 1945", lty = 3)
+wtd.hist(x = pop_log_2019$taux_19_45[is.na(pop_log_2019$taux_19_45) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_19_45) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_19_45) == 0]),
+         col = "lightskyblue1", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1946 et 1970
+taux_ancien_46_70_france <-
+  density(pop_log_2019$taux_46_70[is.na(pop_log_2019$taux_46_70) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_46_70) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_46_70) == 0]))
+plot(taux_ancien_46_70_france, col = couleur_france, lwd = 1.5, cex.main = 1,
+     main = "Construits entre 1946 et 1970", ylim = c(0, 5.5), lty = 3)
+wtd.hist(x = pop_log_2019$taux_46_70[is.na(pop_log_2019$taux_46_70) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_46_70) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_46_70) == 0]),
+         col = "palegreen", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1971 et 1990
+taux_ancien_71_90_france <-
+  density(pop_log_2019$taux_71_90[is.na(pop_log_2019$taux_71_90) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_71_90) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_71_90) == 0]))
+plot(taux_ancien_71_90_france, col = couleur_france, lwd = 1.5, cex.main = 1,
+     main = "Construits entre 1971 et 1990", lty = 3)
+wtd.hist(x = pop_log_2019$taux_71_90[is.na(pop_log_2019$taux_71_90) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_71_90) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_71_90) == 0]),
+         col = "pink", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1991 et 2005
+taux_ancien_91_05_france <-
+  density(pop_log_2019$taux_91_05[is.na(pop_log_2019$taux_91_05) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_91_05) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_91_05) == 0]))
+plot(taux_ancien_91_05_france, col = couleur_france, lwd = 1.5, cex.main = 1,
+     main = "Construits entre 1991 et 2005", ylim = c(0, 5), lty = 3)
+wtd.hist(x = pop_log_2019$taux_91_05[is.na(pop_log_2019$taux_91_05) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_91_05) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_91_05) == 0]),
+         col = couleur_territoiresru, density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 2006 et 2015
+taux_ancien_06_15_france <-
+  density(pop_log_2019$taux_06_15[is.na(pop_log_2019$taux_06_15) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_06_15) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_06_15) == 0]))
+plot(taux_ancien_06_15_france, col = couleur_france, lwd = 1.5, cex.main = 1,
+     main = "Construits entre 2006 et 2015", ylim = c(0, 6), lty = 3)
+wtd.hist(x = pop_log_2019$taux_06_15[is.na(pop_log_2019$taux_06_15) == 0],
+          weights = pop_log_2019$P19_RP[is.na(pop_log_2019$taux_06_15) == 0]/
+            sum(pop_log_2019$P19_RP[is.na(pop_log_2019$taux_06_15) == 0]),
+         col = "snow3", density = 30, add = TRUE, freq = FALSE)
+
+title("Taux des dates de constructions de logements des quartiers IRIS",
+      outer = TRUE)
+```
+
+### Ancienneté des logements dans le territoire SRU
+```{r ancienneté territoire SRU quartier}
+# Sur l'ensemble des quartiers (un poids par quartier)
+par(mfrow = c(3, 2), oma = c(0, 9, 2, 9), mar = c(2, 2, 2, 2))
+# Taux de résidences principales construites avant 1919
+hist(pop_log_2019_terrsru$taux_av19, 
+     main = "Construits avant 1919", xlab = "taux de résidences principales",
+     col = "navajowhite", cex.main = 1)
+# Taux de résidences principales construites entre 1919 et 1945
+hist(pop_log_2019_terrsru$taux_19_45,
+     main = "Construits entre 1919 et 1945", col = "lightskyblue1",
+     xlab = "taux de résidences principales", cex.main = 1) 
+# Taux de résidences principales construites entre 1946 et 1970
+hist(pop_log_2019_terrsru$taux_46_70,
+     main = "Construits entre 1946 et 1970", col = "palegreen",
+     xlab = "taux de résidences principales", cex.main = 1) 
+# Taux de résidences principales construites entre 1971 et 1990
+hist(pop_log_2019_terrsru$taux_71_90,
+     main = "Construits entre 1971 et 1990", col = "pink",
+     xlab = "taux de résidences principales", cex.main = 1)
+# Taux de résidences principales construites entre 1991 et 2005
+hist(pop_log_2019_terrsru$taux_91_05,
+     main = "Construits entre 1991 et 2005", col = couleur_territoiresru,
+     xlab = "taux de résidences principales", cex.main = 1) 
+# Taux de résidences principales construites entre 2006 et 2015
+hist(pop_log_2019_terrsru$taux_06_15,
+     main = "Construits entre 2006 et 2015", col = "snow",
+     xlab = "taux de résidences principales", cex.main = 1) 
+
+title("Taux des dates de constructions de logements des quartiers IRIS du territoire SRU",
+      outer = TRUE, cex.main = 1.1)
+```
+
+```{r ancienneté territoire SRU logement}
+# Sur les quartiers du territoire SRU (un poids par logement)
+par(mfrow = c(3, 2), oma = c(0, 9, 2, 9), mar = c(2, 2, 2, 2))
+# Taux de résidences principales construites avant 1919
+taux_ancien_av19_terrsru <-
+  density(pop_log_2019_terrsru$taux_av19[is.na(pop_log_2019_terrsru$taux_av19) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_av19) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_av19) == 0]))
+plot(taux_ancien_av19_terrsru, col = couleur_territoiresru, lwd = 1.5,
+     main = "Construits avant 1919", cex.main = 1)
+wtd.hist(x = pop_log_2019_terrsru$taux_av19[is.na(pop_log_2019_terrsru$taux_av19) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_av19) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_av19) == 0]),
+         col = "navajowhite", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1919 et 1945
+taux_ancien_19_45_terrsru <-
+  density(pop_log_2019_terrsru$taux_19_45[is.na(pop_log_2019_terrsru$taux_19_45) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_19_45) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_19_45) == 0]))
+plot(taux_ancien_19_45_terrsru, col = couleur_territoiresru, lwd = 1.5,
+     main = "Construits entre 1919 et 1945", cex.main = 1)
+wtd.hist(x = pop_log_2019_terrsru$taux_19_45[is.na(pop_log_2019_terrsru$taux_19_45) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_19_45) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_19_45) == 0]),
+         col = "lightskyblue1", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1946 et 1970
+taux_ancien_46_70_terrsru <-
+  density(pop_log_2019_terrsru$taux_46_70[is.na(pop_log_2019_terrsru$taux_46_70) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_46_70) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_46_70) == 0]))
+plot(taux_ancien_46_70_terrsru, col = couleur_territoiresru, lwd = 1.5,
+     main = "Construits entre 1946 et 1970", ylim = c(0, 4), cex.main = 1)
+wtd.hist(x = pop_log_2019_terrsru$taux_46_70[is.na(pop_log_2019_terrsru$taux_46_70) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_46_70) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_46_70) == 0]),
+         col = "palegreen", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1971 et 1990
+taux_ancien_71_90_terrsru <-
+  density(pop_log_2019_terrsru$taux_71_90[is.na(pop_log_2019_terrsru$taux_71_90) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_71_90) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_71_90) == 0]))
+plot(taux_ancien_71_90_terrsru, col = couleur_territoiresru, lwd = 1.5,
+     main = "Construits entre 1971 et 1990", cex.main = 1)
+wtd.hist(x = pop_log_2019_terrsru$taux_71_90[is.na(pop_log_2019_terrsru$taux_71_90) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_71_90) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_71_90) == 0]),
+         col = "pink", density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 1991 et 2005
+taux_ancien_91_05_terrsru <-
+  density(pop_log_2019_terrsru$taux_91_05[is.na(pop_log_2019_terrsru$taux_91_05) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_91_05) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_91_05) == 0]))
+plot(taux_ancien_91_05_terrsru, col = couleur_territoiresru, lwd = 1.5,
+     main = "Construits entre 1991 et 2005", ylim = c(0, 4), cex.main = 1)
+wtd.hist(x = pop_log_2019_terrsru$taux_91_05[is.na(pop_log_2019_terrsru$taux_91_05) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_91_05) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_91_05) == 0]),
+         col = couleur_territoiresru, density = 30, add = TRUE, freq = FALSE)
+
+# Taux de résidences principales construites entre 2006 et 2015
+taux_ancien_06_15_terrsru <-
+  density(pop_log_2019_terrsru$taux_06_15[is.na(pop_log_2019_terrsru$taux_06_15) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_06_15) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_06_15) == 0]))
+plot(taux_ancien_06_15_terrsru, col = couleur_territoiresru, lwd = 1.5,
+     main = "Construits entre 2006 et 2015", ylim = c(0, 6), cex.main = 1)
+wtd.hist(x = pop_log_2019_terrsru$taux_06_15[is.na(pop_log_2019_terrsru$taux_06_15) == 0],
+          weights = pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_06_15) == 0]/
+            sum(pop_log_2019_terrsru$P19_RP[is.na(pop_log_2019_terrsru$taux_06_15) == 0]),
+         col = "snow3", density = 30, add = TRUE, freq = FALSE)
+
+title("Taux des dates de constructions de logements des quartiers IRIS du territoire SRU",
+      outer = TRUE, cex.main = 1.1)
+```
+
+### Ancienneté des logements dans les quartiers IRIS des communes soumises à la loi SRU
+```{r ancienneté communes soumises SRU quartier}
+# Sur l'ensemble des quartiers (un poids par quartier)
+par(mfrow = c(3, 2), oma = c(0, 9, 2, 9), mar = c(2, 2, 2, 2))
+# Taux de résidences principales construites avant 1919
+hist(pop_log_2019_cososru$taux_av19, breaks = 0:20/20, cex.main = 1,
+     main = "Construits avant 1919", xlab = "taux de résidences principales",
+     col = "navajowhite")
+# Taux de résidences principales construites entre 1919 et 1945
+hist(pop_log_2019_cososru$taux_19_45, breaks = 0:20/20, cex.main = 1,
+     main = "Construits entre 1919 et 1945", col = "lightskyblue1",
+     xlab = "taux de résidences principales") 
+# Taux de résidences principales construites entre 1946 et 1970
+hist(pop_log_2019_cososru$taux_46_70, breaks = 0:20/20, cex.main = 1,
+     main = "Construits entre 1946 et 1970", col = "palegreen",
+     xlab = "taux de résidences principales") 
+# Taux de résidences principales construites entre 1971 et 1990
+hist(pop_log_2019_cososru$taux_71_90, breaks = 0:20/20, cex.main = 1,
+     main = "Construits entre 1971 et 1990", col = "pink",
+     xlab = "taux de résidences principales")
+# Taux de résidences principales construites entre 1991 et 2005
+hist(pop_log_2019_cososru$taux_91_05, breaks = 0:20/20, cex.main = 1,
+     main = "Construits entre 1991 et 2005", col = couleur_territoiresru,
+     xlab = "taux de résidences principales") 
+# Taux de résidences principales construites entre 2006 et 2015
+hist(pop_log_2019_cososru$taux_06_15, breaks = 0:20/20, cex.main = 1,
+     main = "Construits entre 2006 et 2015", col = "snow",
+     xlab = "taux de résidences principales") 
+
+title("Taux des dates de constructions de logements des quartiers IRIS des communes soumises à la loi SRU",
+      outer = TRUE, cex.main = 0.9)
+```
+
+```{r ancienneté commune soumise SRU logement}
+# Sur l'ensemble des quartiers (un poids par logement)
+par(mfrow = c(3, 2), oma = c(0, 9, 2, 9), mar = c(2, 2, 2, 2))
+# Taux de résidences principales construites avant 1919
+taux_ancien_av19_cososru <-
+  density(pop_log_2019_cososru$taux_av19[is.na(pop_log_2019_cososru$taux_av19) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_av19) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_av19) == 0]))
+plot(taux_ancien_av19_cososru, col = couleur_communessru, lwd = 1.5,
+     main = "Construits avant 1919", cex.main = 1, lty = 5)
+wtd.hist(x = pop_log_2019_cososru$taux_av19[is.na(pop_log_2019_cososru$taux_av19) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_av19) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_av19) == 0]),
+         col = "navajowhite", density = 30, add = TRUE, freq = FALSE, breaks = 0:20/20)
+
+# Taux de résidences principales construites entre 1919 et 1945
+taux_ancien_19_45_cososru <-
+  density(pop_log_2019_cososru$taux_19_45[is.na(pop_log_2019_cososru$taux_19_45) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_19_45) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_19_45) == 0]))
+plot(taux_ancien_19_45_cososru, col = couleur_communessru, lwd = 1.5,
+     main = "Construits entre 1919 et 1945", cex.main = 1, lty = 5)
+wtd.hist(x = pop_log_2019_cososru$taux_19_45[is.na(pop_log_2019_cososru$taux_19_45) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_19_45) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_19_45) == 0]),
+         col = "lightskyblue1", density = 30, add = TRUE, freq = FALSE, breaks = 0:20/20)
+
+# Taux de résidences principales construites entre 1946 et 1970
+taux_ancien_46_70_cososru <-
+  density(pop_log_2019_cososru$taux_46_70[is.na(pop_log_2019_cososru$taux_46_70) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_46_70) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_46_70) == 0]))
+plot(taux_ancien_46_70_cososru, col = couleur_communessru, lwd = 1.5,
+     main = "Construits entre 1946 et 1970", cex.main = 1, lty = 5)
+wtd.hist(x = pop_log_2019_cososru$taux_46_70[is.na(pop_log_2019_cososru$taux_46_70) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_46_70) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_46_70) == 0]),
+         col = "palegreen", density = 30, add = TRUE, freq = FALSE, breaks = 0:20/20)
+
+# Taux de résidences principales construites entre 1971 et 1990
+taux_ancien_71_90_cososru <-
+  density(pop_log_2019_cososru$taux_71_90[is.na(pop_log_2019_cososru$taux_71_90) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_71_90) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_71_90) == 0]))
+plot(taux_ancien_71_90_cososru, col = couleur_communessru, lwd = 1.5,
+     main = "Construits entre 1971 et 1990", cex.main = 1, lty = 5)
+wtd.hist(x = pop_log_2019_cososru$taux_71_90[is.na(pop_log_2019_cososru$taux_71_90) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_71_90) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_71_90) == 0]),
+         col = "pink", density = 30, add = TRUE, freq = FALSE, breaks = 0:20/20)
+
+# Taux de résidences principales construites entre 1991 et 2005
+taux_ancien_91_05_cososru <-
+  density(pop_log_2019_cososru$taux_91_05[is.na(pop_log_2019_cososru$taux_91_05) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_91_05) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_91_05) == 0]))
+plot(taux_ancien_91_05_cososru, col = couleur_communessru, lwd = 1.5,
+     main = "Construits entre 1991 et 2005", cex.main = 1, lty = 5)
+wtd.hist(x = pop_log_2019_cososru$taux_91_05[is.na(pop_log_2019_cososru$taux_91_05) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_91_05) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_91_05) == 0]),
+         col = couleur_territoiresru, density = 30, add = TRUE, freq = FALSE, breaks = 0:20/20)
+
+# Taux de résidences principales construites entre 2006 et 2015
+taux_ancien_06_15_cososru <-
+  density(pop_log_2019_cososru$taux_06_15[is.na(pop_log_2019_cososru$taux_06_15) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_06_15) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_06_15) == 0]))
+plot(taux_ancien_06_15_cososru, col = couleur_communessru, lwd = 1.5,
+     main = "Construits entre 2006 et 2015", ylim = c(0, 6), cex.main = 1, lty = 5)
+wtd.hist(x = pop_log_2019_cososru$taux_06_15[is.na(pop_log_2019_cososru$taux_06_15) == 0],
+          weights = pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_06_15) == 0]/
+            sum(pop_log_2019_cososru$P19_RP[is.na(pop_log_2019_cososru$taux_06_15) == 0]),
+         col = "snow3", density = 30, add = TRUE, freq = FALSE, breaks = 0:20/20)
+
+title("Taux des dates de constructions de logements des quartiers IRIS des communes soumises à la loi SRU",
+      outer = TRUE, cex.main = 0.9)
+```
+
+### Ancienneté des logements dans les quartiers IRIS des logements construits pour la loi SRU
+#### Logements construits avant 1919
+```{r}
+# un poids par logement
+plot(density(LS_IRIS$taux_av19[is.na(LS_IRIS$taux_av19) == 0]), col = couleur_quartiersru,
+     main = "Taux de constructions avant 1919",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_av19, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = "orange", density = 25, breaks = 0:20*0.05)
+
+plot(taux_ancien_av19_terrsru, col = couleur_territoiresru, lty = 1, lwd = 2,
+     main = "Densités des logements construits avant 1919",
+     ylim = c(0, 28))
+lines(taux_ancien_av19_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_av19[is.na(LS_IRIS$taux_av19) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', 
+       legend = c('territoire SRU', 'communes soumises', 
+                  'quartiers concernés par SRU'),
+       lty = c(1, 5, 6), lwd = 2, 
+       col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+#### Logements construits entre 1919 et 1945
+```{r}
+# un poids par logement
+plot(density(LS_IRIS$taux_19_45[is.na(LS_IRIS$taux_19_45) == 0]), col = couleur_quartiersru,
+     main = "Taux de constructions entre 1919 et 1945",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_19_45, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = "skyblue", density = 25, breaks = 0:20*0.05)
+
+plot(taux_ancien_19_45_terrsru, col = couleur_territoiresru, lty = 1, lwd = 2,
+     main = "Densités des logements construits entre 1919 et 1945",
+     ylim = c(0, 22))
+lines(taux_ancien_19_45_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_19_45[is.na(LS_IRIS$taux_19_45) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', lty = c(1, 5, 6), lwd = 2, 
+       legend = c('territoire SRU', 'communes soumises', 'quartiers concernés par SRU'), 
+       col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+#### Logements construits entre 1946 et 1970
+```{r}
+# un poids par logement
+plot(density(LS_IRIS$taux_46_70[is.na(LS_IRIS$taux_46_70) == 0]), col = couleur_quartiersru,
+     main = "Taux de constructions entre 1946 et 1970",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_46_70, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = "palegreen", density = 25, breaks = 0:20*0.05)
+
+plot(taux_ancien_46_70_terrsru, col = couleur_territoiresru, lty = 1, lwd = 2,
+     main = "Densités des logements construits entre 1946 et 1970",
+     ylim = c(0, 5))
+lines(taux_ancien_46_70_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_46_70[is.na(LS_IRIS$taux_46_70) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', lty = c(1, 5, 6), lwd = 2, 
+       legend = c('territoire SRU', 'communes soumises', 'quartiers concernés par SRU'), 
+       col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+#### Logements construits entre 1971 et 1990
+```{r}
+# un poids par logement
+plot(density(LS_IRIS$taux_71_90[is.na(LS_IRIS$taux_71_90) == 0]), col = couleur_quartiersru,
+     main = "Taux de constructions entre 1971 et 1990",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_71_90, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = "pink", density = 25, breaks = 0:20*0.05)
+
+plot(taux_ancien_71_90_terrsru, col = couleur_territoiresru, lty = 1, lwd = 2,
+     main = "Densités des logements construits entre 1971 et 1990", ylim = c(0, 3.5))
+lines(taux_ancien_71_90_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_71_90[is.na(LS_IRIS$taux_71_90) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', lty = c(1, 5, 6), lwd = 2, 
+       legend = c('territoire SRU', 'communes soumises', 'quartiers concernés par SRU'), 
+       col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+#### Logements construits entre 1991 et 2005
+```{r}
+# un poids par logement
+plot(density(LS_IRIS$taux_91_05[is.na(LS_IRIS$taux_91_05) == 0]), col = couleur_quartiersru,
+     main = "Taux de constructions entre 1991 et 2005",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_91_05, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = couleur_territoiresru, density = 25, breaks = 0:20*0.05)
+
+plot(taux_ancien_91_05_terrsru, col = couleur_territoiresru, lty = 1, lwd = 2,
+     main = "Densités des logements construits entre 1991 et 2005")
+lines(taux_ancien_91_05_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_91_05[is.na(LS_IRIS$taux_91_05) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', lty = c(1, 5, 6), lwd = 2, 
+       legend = c('territoire SRU', 'communes soumises', 'quartiers concernés par SRU'), 
+       col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+#### Logements construits entre 2006 et 2015
+```{r}
+# un poids par logement
+plot(density(LS_IRIS$taux_06_15[is.na(LS_IRIS$taux_06_15) == 0]), col = couleur_quartiersru,
+     main = "Taux de constructions entre 2006 et 2016",
+     lwd = 2, xlim = c(0, 1), lty = 6)
+hist(LS_IRIS$taux_06_15, freq = FALSE, xlim = c(0, 1), add = TRUE,
+     col = "snow4", density = 25, breaks = 0:20*0.05)
+
+plot(taux_ancien_06_15_terrsru, col = couleur_territoiresru, lty = 1, lwd = 2,
+     main = "Densités des logements construits entre 2006 et 2016")
+lines(taux_ancien_06_15_cososru, lty = 5, lwd = 2, col = couleur_communessru)
+lines(density(LS_IRIS$taux_06_15[is.na(LS_IRIS$taux_06_15) == 0]), col = "navy",
+      lwd = 2, lty = 6)
+legend('topright', lty = c(1, 5, 6), lwd = 2, 
+       legend = c('territoire SRU', 'communes soumises', 'quartiers concernés par SRU'), 
+       col = c(couleur_territoiresru, couleur_communessru, couleur_quartiersru))
+```
+
+
+
+# Logements
+
+## Les logements construits pour la loi SRU
+
+### Loyer
+```{r}
+# les loyers sont inscrits avec des ',' lorsque qu'il ne s'agit pas d'un nombre 
+# entier donc R les comprend comme des chaîne de caractères. On remplace les ','
+# par des '.' et on les transforme en nombres.
+LS_IRIS$LOYERPRINC = as.numeric(gsub(',', '.', LS_IRIS$LOYERPRINC))
+
+# Affichage
+summary(LS_IRIS$LOYERPRINC)
+hist(LS_IRIS$LOYERPRINC, main = "Loyer des logements réponse à la loi SRU",
+     xlab = "loyer (en euro)")
+boxplot(LS_IRIS$LOYERPRINC, main = "Loyer des logements réponse à la loi SRU")
+```
+Il y 29287 valeurs manquantes dans les loyers des logements sociaux construits en réponse à la loi SRU. (Il y a 443 782 logements sociaux construits pour la loi SRU.)
+
+### Type de logement
+Les logements sociaux du parc HLM sont définis par leur financement.
+```{r}
+# création d'une variable avec les groupe de financement de logements sociaux
+LS_IRIS$financement <- gsub("10", "PLAI", as.character(LS_IRIS$FINAN))
+LS_IRIS$financement <- gsub("11", "PLAI", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("12", "PLUS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("13", "PLUS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("14", "PLS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("15", "PLS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("16", "PLI", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("17", "PLS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("49", "autre", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("51", "PLUS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("52", "PLUS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("53", "PLUS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("54", "PLUS", LS_IRIS$financement)
+LS_IRIS$financement <- gsub("99", "autre", LS_IRIS$financement)
+
+table(LS_IRIS$financement)
+table(LS_IRIS$financement)/length(LS_IRIS[,1])
+barplot(table(LS_IRIS$financement),
+        main = "Types des logements sociaux réponses à la loi SRU")
+```
+
+
+### Nombre de pièces
+```{r}
+table(LS_IRIS$NBPIECE)
+table(LS_IRIS$NBPIECE)/length(LS_IRIS[,1])
+barplot(table(LS_IRIS$NBPIECE), xlab = "pièces", ylab = "effectifs",
+        main = "Nombre de pièce des logements réponse à la loi SRU")
+```
+
+
+
+```{r}
+group <- as.factor(LS_IRIS$financement)
+plot(LS_IRIS$LOYERPRINC, LS_IRIS$NBPIECE, pch = as.numeric(group), col = group,
+     xlab = "loyer", ylab = "nombre de pièces",
+     main = "Nombre de pièces, loyer et types des logements sociaux réponse à la loi SRU")
+legend("bottomright", legend = unique(LS_IRIS$financement), 
+       pch = unique(as.numeric(group)), col = unique(group),
+       title = "Financement")
+```
+
+
+## Les logements construits avant la loi SRU dans les quartiers IRIS concernés
+```{r liste des quartiers concernés}
+quartiers = unique(LS_IRIS$quartier_iris)
+length(quartiers)
+```
+Il y a 4820 quartiers IRIS qui sont concernés par des logements construits en réponse à la loi SRU.
+On va chercher les logements qui sont construits dans ces quartiers avant la loi SRU.
+
+```{r}
+geoloc2021_decret$PLG_IRIS2021[geoloc2021_decret$PLG_IRIS2021 == 'CSZ'] = '0000'
+geoloc2021_decret$PLG_IRIS2021[is.na(geoloc2021_decret$PLG_IRIS2021)] = '0000'
+
+# On concatène les codes des communes et des quartiers IRIS
+# pour avoir le code du quartier en entier
+geoloc2021_decret$quartier_iris <- paste(geoloc2021_decret$DEPCOM, geoloc2021_decret$PLG_IRIS2021,
+                                  sep = "")
+```
+
+```{r}
+logements_precedents <-
+geoloc2021_decret[geoloc2021_decret$quartier_iris %in% quartiers &
+                  geoloc2021_decret$CONSTRUCT <= 2001 &
+                  geoloc2021_decret$FINAN != 16,]
+```
+
+Il y a 608072 logements construits avant la mise en place de la loi SRU dans les quartiers où seront construits des logements sociaux en réponse à la loi SRU.
+
+```{r}
+length(unique(logements_precedents$quartier_iris))
+```
+
+### Loyer
+```{r}
+# les loyers sont inscrits avec des ',' lorsque qu'il ne s'agit pas d'un nombre 
+# entier donc R les comprend comme des chaîne de caractères. On remplace les ','
+# par des '.' et on les transforme en nombres.
+logements_precedents$LOYERPRINC = as.numeric(gsub(',', '.', logements_precedents$LOYERPRINC))
+
+# Affichage
+summary(logements_precedents$LOYERPRINC)
+hist(logements_precedents$LOYERPRINC, main = "Loyer des logements précédents la loi SRU",
+     xlab = "loyer (en euro)")
+boxplot(logements_precedents$LOYERPRINC, main = "Loyer des logements précédets la loi SRU")
+```
+Il y 27803 valeurs manquantes dans les loyers des logements sociaux précédents la loi SRU. (Il y a 608072 logements sociaux précédents la loi SRU.)
+
+### Type de logement
+Les logements sociaux du parc HLM sont définis par leur financement.
+```{r}
+# création d'une variable avec les groupes de financement de logements sociaux
+logements_precedents$financement <- gsub("10", "PLAI", as.character(logements_precedents$FINAN))
+logements_precedents$financement <- gsub("11", "PLAI", logements_precedents$financement)
+logements_precedents$financement <- gsub("12", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("13", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("14", "PLS", logements_precedents$financement)
+logements_precedents$financement <- gsub("15", "PLS", logements_precedents$financement)
+logements_precedents$financement <- gsub("16", "PLI", logements_precedents$financement)
+logements_precedents$financement <- gsub("17", "PLS", logements_precedents$financement)
+logements_precedents$financement <- gsub("49", "autre", logements_precedents$financement)
+logements_precedents$financement <- gsub("50", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("51", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("52", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("53", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("54", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("55", "PLUS", logements_precedents$financement)
+logements_precedents$financement <- gsub("99", "autre", logements_precedents$financement)
+
+table(logements_precedents$financement)
+sum(is.na(logements_precedents$financement))
+table(logements_precedents$financement)/length(logements_precedents[,1])
+barplot(table(logements_precedents$financement),
+        main = "Types des logements sociaux précédents la loi SRU")
+```
+
+
+### Nombre de pièces
+```{r}
+table(logements_precedents$NBPIECE)
+table(logements_precedents$NBPIECE)/length(logements_precedents[,1])
+barplot(table(logements_precedents$NBPIECE), xlab = "pièces", ylab = "effectif", 
+        main = "Nombre de pièces des logements sociaux précédents la loi SRU")
+```
+
+```{r}
+group <- as.factor(logements_precedents$financement)
+plot(logements_precedents$LOYERPRINC, logements_precedents$NBPIECE, pch = as.numeric(group), col = group,
+     xlab = "loyer", ylab = "nombre de pièces",
+     main = "Nombre de pièces, loyer et types des logements sociaux précédents la loi SRU   ")
+legend("bottomright", legend = unique(logements_precedents$financement), 
+       pch = unique(as.numeric(group)), col = unique(group),
+       title = "Financement")
+```
+
+
+
+## Comparaison des logements construits pour la loi SRU et les logements les précédant
+
+```{r}
+# Calcul des moyennes et médianes des loyers pour les logements précédents la loi SRU
+mydb <- dbConnect(RSQLite::SQLite(), "")
+dbWriteTable(mydb, "logements_precedents", logements_precedents)
+dbWriteTable(mydb, "LS_IRIS", LS_IRIS)
+
+# les loyers moyen et médian des LS par quartiers IRIS pour les logements 
+# précédents la loi SRU
+MOY_pre <-
+  dbGetQuery(mydb, "
+        SELECT DEPCOM, quartier_iris,
+        AVG(LOYERPRINC) \"LOYERCOM_MOY_pre\", 
+        MEDIAN(LOYERPRINC) \"LOYERCOM_MED_pre\",
+        AVG(NBPIECE) \"NBPIECE_MOY_pre\", 
+        MEDIAN(NBPIECE) \"NBPIECE_MED_pre\", 
+        COUNT(*) \"NB_LOG_pre\"
+        FROM logements_precedents
+        GROUP BY quartier_iris
+        ")
+
+# les loyers moyen et médian des LS par quartier IRIS pour les logements réponse
+# à la loi SRU
+MOY_rep <- 
+  dbGetQuery(mydb, "
+        SELECT DEPCOM, quartier_iris,
+        AVG(LOYERPRINC) \"LOYERCOM_MOY_rep\", 
+        MEDIAN(LOYERPRINC) \"LOYERCOM_MED_rep\",
+        AVG(NBPIECE) \"NBPIECE_MOY_rep\", 
+        MEDIAN(NBPIECE) \"NBPIECE_MED_rep\", 
+        COUNT(*) \"NB_LOG_rep\"
+        FROM LS_IRIS
+        GROUP BY quartier_iris
+        ")
+
+dbWriteTable(mydb, "MOY_pre", MOY_pre)
+dbWriteTable(mydb, "MOY_rep", MOY_rep)
+
+MOY <- 
+  dbGetQuery(mydb, "
+             SELECT quartier_iris,
+                    LOYERCOM_MOY_pre, LOYERCOM_MOY_rep,
+                    LOYERCOM_MED_pre, LOYERCOM_MED_rep,
+                    NBPIECE_MOY_pre, NBPIECE_MOY_rep,
+                    NBPIECE_MED_pre, NBPIECE_MED_rep,
+                    NB_LOG_pre, NB_LOG_rep
+             FROM MOY_pre m1 JOIN 
+                  MOY_rep m2 USING(quartier_iris)")
+
+dbDisconnect(mydb)
+```
+
+On regarde les 4074 quartierss qui ont des logements sociaux construits avant et après l'application de la loi.
+
+```{r}
+max = max(c(MOY$LOYERCOM_MED_pre[is.na(MOY$LOYERCOM_MED_pre) == 0], 
+            MOY$LOYERCOM_MED_rep[is.na(MOY$LOYERCOM_MED_rep) == 0]))
+par(mar = par("mar") + c(0, 7.5, 0, 7.5))
+plot(MOY$LOYERCOM_MOY_pre, MOY$LOYERCOM_MOY_rep, pch = 20,
+     xlab = "loyer des logements précédents la loi SRU",
+     ylab = "loyer des logements réponse à la loi SRU",
+     main = "Loyers moyens par quartier des logements sociaux",
+     xlim = c(0, max), ylim = c(0, max))
+```
+
+```{r}
+MOY[is.na(MOY$LOYERCOM_MOY_pre) == 0 & MOY$LOYERCOM_MOY_pre>2000,]
+logements_precedents[logements_precedents$quartier_iris == 603820201,]
+```
+
+Le quartier 603820201 a une moyenne très haute pour les loyers précédents la loi SRU. En fait, il s'agit d'un seul logement avec un loyer élevé.
+
+```{r}
+hist(MOY$LOYERCOM_MOY_pre - MOY$LOYERCOM_MOY_rep)
+```
+
+
+```{r}
+par(mar = par("mar") + c(0, 7.5, 0, 7.5))
+plot(MOY$LOYERCOM_MED_pre, MOY$LOYERCOM_MED_rep, pch = 20,
+     xlab = "loyer logements précédents la loi SRU",
+     ylab = "loyer logements réponse à la loi SRU",
+     main = "Loyers médians par quartier des logements sociaux",
+     xlim = c(0, max), ylim = c(0, max))
+```
+
+```{r}
+par(mar = par("mar") + c(0, 7.5, 0, 7.5))
+plot(MOY$NBPIECE_MOY_pre, MOY$NBPIECE_MOY_rep, pch = 20,
+     xlab = "Nombre de pièces pour les logements précédents la loi SRU",
+     ylab = "Nombre de pièces pour les logements réponse    ",
+     main = "Nombres de pièces moyen pour les quartiers IRIS",
+     xlim = c(1, 9), ylim = c(1, 9), lab = c(9, 9, 0))
+```
+
+```{r}
+table(MOY$NBPIECE_MED_pre, MOY$NBPIECE_MED_rep)
+```
+
+
+
+## Comparaison des logements construits pour la loi SRU et du parc total
+### parc total sur la période
+```{r logements du parc total sur la période}
+log_periode <- geoloc2021_decret[geoloc2021_decret$CONSTRUCT >= 2002 & # les logements construits à partir de 2002
+                                 !(geoloc2021_decret$DEPCOM %in% c( # mais pas dans les communes soumises à la loi SRU
+                                 communes_soumises_SRU$code_commune, arrondissements$code)) &
+                                 geoloc2021_decret$FINAN != 16,] # On ne prend pas en compte les logements PLI.
+log_periode$LOYERPRINC <- as.numeric(gsub(',', '.', log_periode$LOYERPRINC))
+```
+
+Il y a 1218005 logements sociaux construits dans le parc HLM depuis l'application de la loi SRU, dont 679853 qui ne sont pas construits dans les communes soumises à la loi SRU.
+
+#### Loyer
+```{r}
+summary(log_periode$LOYERPRINC)
+boxplot(LS_IRIS$LOYERPRINC, log_periode$LOYERPRINC,
+        ylab = "loyer (en euro)", 
+        main = "Loyers des logements du parc HLM construits sur la période de la loi SRU",
+        names = c("logements SRU", "logements non SRU"))
+```
+
+#### Type de logement
+```{r type de logements de tout le parc HLM de la periode SRU}
+# création d'une variable avec les groupes de financement de logements sociaux
+log_periode$financement <- gsub("10", "PLAI", as.character(log_periode$FINAN))
+log_periode$financement <- gsub("11", "PLAI", log_periode$financement)
+log_periode$financement <- gsub("12", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("13", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("14", "PLS", log_periode$financement)
+log_periode$financement <- gsub("15", "PLS", log_periode$financement)
+log_periode$financement <- gsub("16", "PLI", log_periode$financement)
+log_periode$financement <- gsub("17", "PLS", log_periode$financement)
+log_periode$financement <- gsub("49", "autre", log_periode$financement)
+log_periode$financement <- gsub("50", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("51", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("52", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("53", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("54", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("55", "PLUS", log_periode$financement)
+log_periode$financement <- gsub("99", "autre", log_periode$financement)
+
+table(log_periode$financement)
+sum(is.na(log_periode$financement))
+table(log_periode$financement)/length(log_periode[,1])
+barplot(table(log_periode$financement),
+        main = "Types des logements sociaux du parc HLM de la période SRU")
+```
+
+#### Nombre de pièces
+```{r}
+table(log_periode$NBPIECE)
+table(log_periode$NBPIECE)/sum(table(log_periode$NBPIECE))
+```
+
+```{r}
+barplot(table(log_periode$NBPIECE))
+```
+
+### parc total sur les communes du territoire SRU et sur la période
+```{r logements du parc total sur la période dans les communes du territoire SRU}
+log_com <- geoloc2021_decret[geoloc2021_decret$CONSTRUCT >= 2002 & # les logements construits sur la même période
+                             geoloc2021_decret$DEPCOM %in% communes_territoire_SRU & # dans le territoire SRU
+                             !(geoloc2021_decret$DEPCOM %in% c( # mais pas dans les communes soumises à la loi SRU
+                               communes_soumises_SRU$code_commune, arrondissements$code)) &
+                              geoloc2021_decret$FINAN != 16,] # et sans les logements PLI
+```
+
+Il y a 503756 logements sociaux du parc HLM construits depuis 2002 dans les communes du territoire SRU mais pas dans les communes soumises à la loi SRU.
+
+#### Loyer
+```{r}
+log_com$LOYERPRINC <- as.numeric(gsub(',', '.', log_com$LOYERPRINC))
+summary(log_com$LOYERPRINC)
+```
+
+#### Type de logement
+```{r}
+# création d'une variable avec les groupes de financement de logements sociaux
+log_com$financement <- gsub("10", "PLAI", as.character(log_com$FINAN))
+log_com$financement <- gsub("11", "PLAI", log_com$financement)
+log_com$financement <- gsub("12", "PLUS", log_com$financement)
+log_com$financement <- gsub("13", "PLUS", log_com$financement)
+log_com$financement <- gsub("14", "PLS", log_com$financement)
+log_com$financement <- gsub("15", "PLS", log_com$financement)
+log_com$financement <- gsub("16", "PLI", log_com$financement)
+log_com$financement <- gsub("17", "PLS", log_com$financement)
+log_com$financement <- gsub("49", "autre", log_com$financement)
+log_com$financement <- gsub("50", "PLUS", log_com$financement)
+log_com$financement <- gsub("51", "PLUS", log_com$financement)
+log_com$financement <- gsub("52", "PLUS", log_com$financement)
+log_com$financement <- gsub("53", "PLUS", log_com$financement)
+log_com$financement <- gsub("54", "PLUS", log_com$financement)
+log_com$financement <- gsub("55", "PLUS", log_com$financement)
+log_com$financement <- gsub("99", "autre", log_com$financement)
+
+table(log_com$financement)
+table(log_com$financement)/sum(table(log_com$financement))
+barplot(table(log_com$financement))
+```
+
+
+#### Nombre de pièces
+```{r}
+table(log_com$NBPIECE)
+table(log_com$NBPIECE)/sum(table(log_com$NBPIECE))
+barplot(table(log_com$NBPIECE))
+```
+
+
+### Comparaison
+#### Loyer
+```{r}
+summary(LS_IRIS$LOYERPRINC)
+summary(logements_precedents$LOYERPRINC)
+summary(log_periode$LOYERPRINC)
+summary(log_com$LOYERPRINC)
+```
+
+```{r}
+boxplot(LS_IRIS$LOYERPRINC, logements_precedents$LOYERPRINC, 
+        log_periode$LOYERPRINC, log_com$LOYERPRINC,
+        names = c("réponse", "précédents", 
+                  "depuis 2002", "territoire SRU"),
+        xlab = "logements", ylab = "loyer", 
+        main = "Boxplots des loyers des logements du parc HLM ")
+```
+
+```{r}
+par(mfrow = c(2,2), oma = c(0, 0, 1, 0), mar = c(4, 2, 1, 1))
+hist(LS_IRIS$LOYERPRINC, main = "logements réponse", xlim = c(0, 2500),
+     xlab = "loyer (en euros)")
+hist(logements_precedents$LOYERPRINC, main = "logements précédents", 
+     xlab = "loyer (en euros)", xlim = c(0, 2500))
+hist(log_periode$LOYERPRINC, main = "logements depuis 2002", xlim = c(0, 2500),
+     xlab = "loyer (en euros)")
+hist(log_com$LOYERPRINC, main = "logements territoire SRU", xlim = c(0, 2500),
+     xlab = "loyer (en euros)")
+title(outer = TRUE, main = "Loyers des logements sociaux du parc HLM")
+```
+
+
+#### Type de logement
+```{r}
+par(mfrow = c(2,2), oma = c(0, 0, 1, 0), mar = c(2, 2, 2, 1))
+barplot(table(LS_IRIS$financement), main = "logements réponse")
+barplot(table(logements_precedents$financement), main = "logements précédents")
+barplot(table(log_periode$financement), main = "logements depuis 2002")
+barplot(table(log_com$financement), main = "logements territoire SRU")
+title(outer = TRUE, main = "Type de logements sociaux du parc HLM")
+```
+
+#### Nombre de pièces
+```{r}
+par(mfrow = c(2,2), oma = c(0, 0, 1, 0), mar = c(2, 2, 2, 1))
+barplot(table(LS_IRIS$NBPIECE), main = "logements réponse")
+barplot(table(logements_precedents$NBPIECE), main = "logements précédents")
+barplot(table(log_periode$NBPIECE), main = "logements depuis 2002")
+barplot(table(log_com$NBPIECE), main = "logements territoire SRU")
+title(outer = TRUE, main = "Nombre de pièces de logements sociaux du parc HLM")
+```
+
+### Taille des logements
+```{r}
+summary(LS_IRIS$SURFHAB)
+summary(logements_precedents$SURFHAB)
+summary(log_periode$SURFHAB)
+summary(log_com$SURFHAB)
+```
+
+```{r}
+boxplot(LS_IRIS$SURFHAB, logements_precedents$SURFHAB, log_periode$SURFHAB,
+        log_com$SURFHAB, xlab = "logements", ylab = "surface habitable (m²)", 
+        names = c("réponse", "précédents", "depuis 2002", "territoire SRU"),
+        main = "Boxplots des surfaces habitables des logements du parc HLM ")
+
+```
+
+```{r}
+par(mfrow = c(2,2), oma = c(0, 1, 1, 0), mar = c(4, 1, 1, 1))
+hist(LS_IRIS$SURFHAB, main = "logements réponse", xlim = c(0, 300),
+     xlab = "surface habitable (m²)")
+hist(logements_precedents$SURFHAB, main = "logements précédents", 
+     xlab = "surface habitable (m²)")
+hist(log_periode$SURFHAB, main = "logements depuis 2002",
+     xlab = "surface habitable (m²)")
+hist(log_com$SURFHAB, main = "logements territoire SRU",
+     xlab = "surface habitable (m²)")
+title(outer = TRUE, main = "Surface habitable des logements sociaux du parc HLM")
+```
+
+
+### Loyer au m²
+```{r}
+LS_IRIS$loyer_m2 = LS_IRIS$LOYERPRINC/LS_IRIS$SURFHAB
+logements_precedents$loyer_m2 = logements_precedents$LOYERPRINC/logements_precedents$SURFHAB
+log_periode$loyer_m2 = log_periode$LOYERPRINC/log_periode$SURFHAB
+log_com$loyer_m2 = log_com$LOYERPRINC/log_com$SURFHAB
+```
+
+```{r}
+summary(LS_IRIS$loyer_m2)
+summary(logements_precedents$loyer_m2)
+summary(log_periode$loyer_m2)
+summary(log_com$loyer_m2)
+```
+
+```{r}
+boxplot(LS_IRIS$loyer_m2, logements_precedents$loyer_m2, log_periode$loyer_m2,
+        log_com$loyer_m2, xlab = "logements", ylab = "loyer au m² (en euros)", 
+        names = c("réponse", "précédents", "depuis 2002", "territoire SRU"),
+        main = "Boxplots des loyer au m² des logements du parc HLM ")
+
+```
+
+```{r}
+LS_IRIS[LS_IRIS$loyer_m2>30 & is.na(LS_IRIS$loyer_m2) == 0,]
+logements_precedents[logements_precedents$loyer_m2>28 & is.na(logements_precedents$loyer_m2) == 0, "FINAN"]
+```
+
+Pour les logements construits en réponse à la loi SRU, il y à 5 logements qui forment le groupe avec des loyers élevés au m². Quatre sont dans la commune 68118 (Hirtzbach) et font 8 m², 3 PLUS et PLAI. Le dernier, et également le moins cher, est dans la commune 92026 (Courbevoie), type de financement : autre.
+
+```{r}
+par(mfrow = c(2,2), oma = c(0, 1, 1, 0), mar = c(4, 1, 1, 1))
+hist(LS_IRIS$loyer_m2, main = "logements réponse", xlim = c(0, 40), cex.main = 1,
+     xlab = "loyer au m²")
+hist(logements_precedents$loyer_m2, main = "logements précédents",  cex.main = 1,
+     xlab = "loyer au m²", xlim = c(0, 40))
+hist(log_periode$loyer_m2, main = "logements depuis 2002", cex.main = 1,
+     xlab = "loyer au m²", xlim = c(0, 40))
+hist(log_com$loyer_m2, main = "logements territoire SRU", cex.main = 1,
+     xlab = "loyer au m²", xlim = c(0, 40))
+title(outer = TRUE, main = "Loyer au m² des logements sociaux du parc HLM")
+```

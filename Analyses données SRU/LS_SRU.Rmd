@@ -1,0 +1,98 @@
+---
+title: "Logements sociaux concernés par la loi SRU"
+author: "Charlotte Courtois Le-Huu"
+date: "2023-08"
+output: html_document
+---
+
+Le but du code suivant est de créer un fichier contenant les données du fichier RPLS pour les logements sociaux qui sont concernés par la loi SRU, c'est-à-dire les logements sociaux probablement construits en réponse à la loi SRU. On cherche donc les logements qui sont construits dans les communes l'année suivant leur soumission à la loi SRU. Les données des bilans SRU se rapporte aux informations des communes au premier janvier de l'année précédant le bilan. Ainsi, pour les communes soumises à la loi SRU dans le bilan 2004, on a leur informations au premier janvier 2003 et on va rechercher les logements sociaux construits dans la commune en 2003. On applique cela aux communes des bilans de la loi SRU de 2004 à 2021.
+
+
+On va charger les données du fichier RPLS.
+```{r chargement données RPLS}
+geoloc2021_decret <- read.csv(
+  "/data/user/g/fgoffette/VenteHLM/donnees_brutes/rpls/geoloc2021_decret.csv", 
+  sep = ';')
+```
+
+On charge les données des bilans SRU de 2004 à 2021 pour les communes soumises à la loi.
+```{r chargement données SRU}
+communes_soumises_SRU <- read.csv(
+   "../donnees_resultat/communes_soumises_SRU.csv")
+```
+
+Pour les années de 2004 à 2021, on regarde si chaque commune est soumise à la loi SRU. On a une colonne pour le code de la commune et une colonne par année.
+```{r fichier années soumission à la loi SRU}
+annees_so = c()
+
+annees_so$an_2004 = (is.na(communes_soumises_SRU$situation_04) == 0)*2003
+annees_so$an_2005 = (is.na(communes_soumises_SRU$situation_05) == 0)*2004
+annees_so$an_2006 = (is.na(communes_soumises_SRU$situation_06) == 0)*2005
+annees_so$an_2007 = (is.na(communes_soumises_SRU$situation_07) == 0)*2006
+annees_so$an_2008 = (is.na(communes_soumises_SRU$situation_08) == 0)*2007
+annees_so$an_2009 = (is.na(communes_soumises_SRU$situation_09) == 0)*2008
+annees_so$an_2010 = (is.na(communes_soumises_SRU$situation_10) == 0)*2009
+annees_so$an_2011 = (is.na(communes_soumises_SRU$situation_11) == 0)*2010
+annees_so$an_2012 = (is.na(communes_soumises_SRU$situation_12) == 0)*2011
+annees_so$an_2013 = (is.na(communes_soumises_SRU$situation_13) == 0)*2012
+annees_so$an_2014 = (is.na(communes_soumises_SRU$situation_14) == 0)*2013
+annees_so$an_2015 = (is.na(communes_soumises_SRU$situation_15) == 0)*2014
+annees_so$an_2016 = (is.na(communes_soumises_SRU$situation_16) == 0)*2015
+annees_so$an_2017 = (is.na(communes_soumises_SRU$situation_17) == 0)*2016
+annees_so$an_2018 = (is.na(communes_soumises_SRU$situation_18) == 0)*2017
+annees_so$an_2019 = (is.na(communes_soumises_SRU$situation_19) == 0)*2018
+annees_so$an_2020 = (is.na(communes_soumises_SRU$situation_20) == 0)*2019
+annees_so$an_2021 = (is.na(communes_soumises_SRU$situation_21) == 0)*2020
+
+annees_so <- as.data.frame(annees_so)
+rownames(annees_so) <- communes_soumises_SRU$code_commune
+```
+
+Dans le fichier SRU, Paris, Lyon et Marseille sont codées par leur code INSEE de commune, tandis que, dans le fichier RPLS, ce sont les codes INSEE de leurs arrondissements qui sont inscrits. On ajoute donc leurs arrondissements.
+```{r codes des arrondissements}
+# code des arrondissements
+arrondissements = c(13201:13216, 69381:69389, 75101:75120)
+
+# années de soumission de Paris, Lyon et Marseille
+Paris_so = annees_so['75056', -1]
+Lyon_so = annees_so['69123', -1]
+Marseille_so = annees_so['13055', -1]
+
+# ajoût au reste des communes
+annees_so[as.character(75101:75120),] = Paris_so
+annees_so[as.character(13201:13216),] = Marseille_so
+annees_so[as.character(69381:69389),] = Lyon_so
+
+
+```
+
+On va d'abord sélectionner les logements sociaux du parc HLM qui sont construits à partir de 2003 dans les communes soumises à la loi SRU. Il faut aussi enlever les logements qui ne sont pas considérés comme des logements sociaux selon la loi SRU, c'est-à-dire les logemements PLI (16 dans la colonne FINAN).
+
+```{r pré-selection des logements}
+geoloc <- geoloc2021_decret[geoloc2021_decret$CONSTRUCT > 2002 & 
+                            geoloc2021_decret$DEPCOM %in% c(communes_soumises_SRU$code_commune, arrondissements) &
+                            geoloc2021_decret$FINAN != 16,]
+```
+
+
+Maintenant on va garder seulement les logements sociaux du parc HLM lorsque les communes sont soumises à la loi SRU.
+```{r selection des logements}
+# creation DataFrame vide pour mettre les logements selectionnes
+df_log = data.frame(matrix(vector(), 0, length(geoloc), 
+                           dimnames = list(c(), colnames(geoloc))), 
+                    stringsAsFactors = FALSE)
+# pour chaque commune soumise à la loi SRU
+for (com in row.names(annees_so)) {
+  temp = geoloc[geoloc$DEPCOM == com,] # les logements de la commune
+  temp = temp[temp$CONSTRUCT %in% annees_so[com,],] # construits quand la communes est soumise à la loi SRU
+  df_log = rbind(df_log, temp) # 
+}
+```
+
+On a donc 492316 logements sociaux du parc HLM construits en réponse à la loi SRU.
+
+```{r creation d un fichier csv et rds}
+saveRDS(df_log, "../donnees_resultat/logements_reponse_SRU.rds")
+write.csv(df_log, "../donnees_resultat/logements_reponse_SRU.csv")
+```
+
