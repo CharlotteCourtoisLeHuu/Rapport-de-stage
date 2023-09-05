@@ -1,0 +1,1147 @@
+---
+title: "Statistiques descriptives des réalisations des objectifs dans les bilans triennaux"
+author: "Charlotte Courtois Le-Huu"
+date: "2023-07"
+output: html_document
+---
+
+Ce code permet de faire des statistiques descriptives sur la réalisations (ou non) des objectifs de constructions de logements sociaux des communes soumises à la loi SRU dans chaque bilan triennal.
+
+```{r}
+library(sqldf)
+```
+
+```{r chargement des donnees}
+# Chargement des données
+dat = read.csv(file = "../donnees_resultat/LLS_communes_quantitatif.csv",
+               na = c('', 'NA', 'NaN', NaN, 'nan', 'NR'))
+# Transformation des données en DataFrame
+df = as.data.frame(dat)
+```
+
+
+```{r}
+# noms des colonnes
+names(df)
+```
+
+Pour chaque bilan triennal, on crée un sous-fichier contenant les données des communes soumises à la loi SRU dans le bilan.
+```{r}
+# Communes soumises pour chaque bilan triennal
+co_so_02_04 = sqldf("SELECT * FROM df WHERE situation_02_04 LIKE 'Soumise%'") 
+co_so_05_07 = sqldf("SELECT * FROM df WHERE situation_05_07 LIKE 'Soumise%'") 
+co_so_08_10 = sqldf("SELECT * FROM df WHERE situation_08_10 LIKE 'Soumise%'")
+co_so_11_13 = sqldf("SELECT * FROM df WHERE situation_11_13 LIKE 'Soumise%'")
+co_so_14_16 = sqldf("SELECT * FROM df WHERE situation_14_16 LIKE 'Soumise%'")
+co_so_17_19 = sqldf("SELECT * FROM df WHERE situation_17_19 LIKE 'Soumise%'")
+```
+
+```{r}
+# liste de toutes les communes
+toutes_communes <-
+sqldf("SELECT code_commune FROM co_so_02_04
+       UNION
+       SELECT code_commune FROM co_so_05_07
+       UNION
+       SELECT code_commune FROM co_so_08_10
+       UNION
+       SELECT code_commune FROM co_so_11_13
+       UNION
+       SELECT code_commune FROM co_so_14_16
+       UNION
+       SELECT code_commune FROM co_so_17_19")
+```
+Il y a 1311 communes présentes au moins une fois dans les bilans triennaux. On va partir de cette liste de communes constantes pour faire des statistiques descriptives sur tous les bilans triennaux et pouvoir les comparer.
+
+
+```{r}
+# Taux d'atteinte de l'objectif pour chaque bilan triennal
+co_so_02_04$taux_obj_02_04 = co_so_02_04$construction_02_04 / co_so_02_04$objectif_02_04
+co_so_05_07$taux_obj_05_07 = co_so_05_07$construction_05_07 / co_so_05_07$objectif_05_07
+co_so_08_10$taux_obj_08_10 = co_so_08_10$construction_08_10 / co_so_08_10$objectif_08_10
+co_so_11_13$taux_obj_11_13 = co_so_11_13$construction_11_13 / co_so_11_13$objectif_11_13
+co_so_14_16$taux_obj_14_16 = co_so_14_16$construction_14_16 / co_so_14_16$objectif_14_16
+co_so_17_19$taux_obj_17_19 = co_so_17_19$construction_17_19 / co_so_17_19$objectif_17_19
+```
+
+```{r}
+# Les communes ayant 0 pour objectif triennal SRU 2011-2013
+sqldf("SELECT code_commune, construction_11_13, objectif_11_13, situation_11_13
+       FROM co_so_11_13 
+       WHERE objectif_11_13 = 0")
+```
+
+Trois communes (27562, 87201 et 97611) ont 0 construction pour objectif pour le bilan triennal 2011-2013. La commune 27562 a construit 8 LLS entre 2011 et 2013. La commune 87201 a construit 18 LLS entre 2011 et 2013. La commune 97611 a construit 287 LLS entre 2011 et 2013.
+
+```{r}
+# Commune ayant 0 pour objectif triennal pour le bilan SRU 2014-2016
+sqldf("SELECT code_commune, construction_14_16, objectif_14_16, situation_14_16, taux_ls_16
+       FROM co_so_14_16
+       WHERE objectif_14_16 = 0")
+```
+
+La commune 22211 a un objectif de 0 construction à faire entre 2014 et 2016, elle a construit 24 LLS.
+
+```{r}
+boxplot(co_so_02_04$taux_obj_02_04, co_so_05_07$taux_obj_05_07, 
+        co_so_08_10$taux_obj_08_10,
+        co_so_11_13$taux_obj_11_13[co_so_11_13$objectif_11_13 != 0],
+        co_so_14_16$taux_obj_14_16[co_so_14_16$objectif_14_16 != 0], 
+        co_so_17_19$taux_obj_17_19,
+        names = c("2002-2004", "2005-2007", "2008-2010", "2011-2013", 
+                  "2014-2016", "2017-2019"),
+        xlab = "bilans triennaux",
+        ylab = "taux d'atteinte de l'objectif du bilan triennal",
+        main = "Taux d'atteinte des objectifs de constructions de LLS des bilans triennaux    ")
+```
+
+
+# Bilan triennal 2002-2004
+```{r}
+# Nombre de communes
+sum(co_so_02_04$code_commune %in% co_so_02_04$code_commune) # 728 communes
+
+ # statistiques descriptives sur le taux de réalisation de l'objectif
+summary(co_so_02_04$taux_obj_02_04)
+quantile(co_so_02_04$taux_obj_02_04, seq(0, 1, 0.1), na.rm = TRUE) # déciles
+
+sum(is.na(co_so_02_04$objectif_02_04)) # nombre de communes sans objectif
+sum(is.na(co_so_02_04$construction_02_04)) # nombre de communes sans construction inscrites
+sum(is.na(co_so_02_04$taux_obj_02_04)) # nombre de communes pour lesquelles le taux ne peut pas être calculé 
+sum(is.na(co_so_02_04$situation_02_04)) # nombre de communes qui n'ont pas de situation en 2002-2004 (Il doit y en avoir 0)
+
+# Les communes n'ayant pas d'objectif fixé pour le bilan
+co_so_02_04[is.na(co_so_02_04$objectif_02_04),]$code_commune
+
+# Les communes dont l'objectif est fixé à 0
+sqldf("SELECT code_commune, construction_02_04, objectif_02_04
+       FROM co_so_02_04
+       WHERE objectif_02_04 = 0")
+```
+
+Les 23 communes qui n'ont ni objectif de constructions, ni nombre de constructions inscrits dans le bilan triennal 2002-2004 : 06152, 38150, 42223, 42302, 42305, 42330, 54339, 59253, 59514, 60382, 62019, 78172, 80164, 80725, 83126, 91179, 91477, 92033, 93047, 95203, 95205, 95288 et 2A004.
+La commune 78267 a un objectif fixé à 0 et a construit 0 LLS.
+
+```{r}
+boxplot(co_so_02_04$taux_obj_02_04, 
+        main = "Taux d'atteinte des objectifs pour le bilan triennal 2002-2004",
+        ylab = "taux d'atteinte de l'objectif du bilan triennal")
+# hist(co_so_02_04$taux_obj_02_04)
+# sqldf("SELECT code_commune, construction_02_04, objectif_02_04, taux_obj_02_04 
+#       FROM co_so_02_04
+#       WHERE taux_obj_02_04 < -1 OR taux_obj_02_04 > 40")
+
+# boxplot(co_so_02_04$taux_obj_02_04[co_so_02_04$taux_obj_02_04 > -1 & co_so_02_04$taux_obj_02_04 < 20])
+# hist(co_so_02_04$taux_obj_02_04[co_so_02_04$taux_obj_02_04 > -1 & co_so_02_04$taux_obj_02_04 < 5])
+```
+
+```{r}
+# Histogramme des communes ayant des nombres de constructions négatifs
+temp = sqldf("SELECT * FROM co_so_02_04 WHERE taux_obj_02_04 < 0")[,
+    c("code_commune", 'construction_02_04','objectif_02_04', "taux_obj_02_04")]
+
+hist(temp$taux_obj_02_04[temp$taux_obj_02_04 > -10], col = "antiquewhite1",
+     xlab = "taux de réalisation des objectifs",
+     main = "Histogramme des réalisations des objectifs triennaux 2002-2004",
+     sub = "pour les communes diminuant leur nombre de LLS sans 2 valeurs extrêmes")
+```
+
+```{r}
+# Les communes ayant 0 contruction
+sqldf("SELECT code_commune FROM co_so_02_04 WHERE construction_02_04 = 0")$code_commune
+```
+
+```{r}
+# Histogramme des communes ayant construit sans atteindre leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_02_04 
+              WHERE taux_obj_02_04 > 0 AND taux_obj_02_04 <1")
+
+hist(temp$taux_obj_02_04, breaks = 20, col = 'antiquewhite',
+     main = "Histogramme des réalisations des objectifs triennaux 2002-2004",
+     xlab = "taux de réalisation des objectifs",
+     sub = "pour les communes n'ayant pas atteint leur objectif et ayant de nouveaux LLS")
+```
+
+```{r}
+# Les communes ayant atteint exactement leur objectif de construction
+sqldf("SELECT *
+       FROM co_so_02_04
+       WHERE taux_obj_02_04 = 1")
+```
+
+```{r}
+# Les communes ayant construits plus que leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_02_04
+              WHERE taux_obj_02_04 > 1")
+hist(temp$taux_obj_02_04,#[temp$taux_obj_02_04<40], 
+     breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2002-2004",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs",
+     sub = "pour les communes ayant atteint leur objectif sans 3 valeurs extrêmes")
+```
+
+```{r}
+# Camembert des situations des communes
+par(mar = c(0, 3, 2, 0))
+pie(table(co_so_02_04$situation_02_04),
+    col = c('lightgreen', 'slateblue4', 'slateblue1', 'oldlace'),
+    labels = c("objectif atteint", "objectif non atteint amende", 
+               "objectif non atteint sans amende", "taux atteint"),
+    main = "Situation des communes pour le bilan triennal 2002-2004")
+```
+
+```{r}
+# Répartition des situations des communes du bilan triennal
+table(co_so_02_04$situation_02_04)/length(co_so_02_04[,1])
+```
+
+```{r}
+# Boite à moustache des taux de LLS dans le bilan annuel 2004 pour les communes 
+# dans le bilan triennal 2002-2004
+boxplot(co_so_02_04$taux_ls_04)
+
+# Commune avec des valeurs de taux de LLS abérantes
+co_so_02_04[co_so_02_04$taux_ls_04 >0.3 & is.na(co_so_02_04$taux_ls_04) == 0, ]
+```
+
+La commune 80725 (Salouël) a pour taux de logements locatifs sociaux, en 2004, 59,64%. Ce nombre est très élevé. Sur le bilan annuel de 2004, 600 logements sociaux sont inscrits pour 1006 résidences principales. D'après les recensements de l'INSEE, cette commune a 162 logements HLM loués vides pour 1290 résidences principales en 2009, soit 12,6%.
+
+
+
+
+# Bilan triennal 2005-2007
+```{r}
+# Nombre de communes dans le bilan
+sum(co_so_05_07$code_commune %in% co_so_05_07$code_commune) # 730 communes
+
+# Statistiques descriptives sur le taux de réalisation de l'objectif
+summary(co_so_05_07$taux_obj_05_07)
+quantile(co_so_05_07$taux_obj_05_07, seq(0, 1, 0.1), na.rm = TRUE) # déciles
+
+sum(is.na(co_so_05_07$objectif_05_07)) # nombre de communes sans objectif
+sum(is.na(co_so_05_07$construction_05_07)) # nombre de communes sans construction inscrites
+sum(is.na(co_so_05_07$taux_obj_05_07)) # nombre de communes pour lesquelles le taux ne peut pas être calculé
+sum(is.na(co_so_05_07$situation_05_07)) # nombre de communes qui n'ont pas de situation en 2005-2007 (Il doit y en avoir 0)
+
+co_so_05_07[is.na(co_so_05_07$objectif_05_07),]$code_commune # les communes où les objectifs ne sont pas fixés
+
+# les communes où les objectifs sont fixés à 0
+sqldf("SELECT code_commune, construction_05_07, objectif_05_07
+       FROM co_so_05_07
+       WHERE objectif_05_07 = 0")
+```
+
+```{r}
+# Boite à moustaches des taux de réalistions de l'objectif
+boxplot(co_so_05_07$taux_obj_05_07)
+# Histogramme des taux de réalisation de l'objectif
+hist(co_so_05_07$taux_obj_05_07)
+# Les commune ayant des nombres négatifs de construction, inférieur à -objectif
+sqldf("SELECT code_commune, construction_05_07, objectif_05_07, taux_obj_05_07 
+       FROM co_so_05_07
+       WHERE taux_obj_05_07 < -1")
+
+boxplot(co_so_05_07$taux_obj_05_07[co_so_05_07$taux_obj_05_07 > -1 & co_so_05_07$taux_obj_05_07 < 20])
+hist(co_so_05_07$taux_obj_05_07[co_so_05_07$taux_obj_05_07 > -1 & co_so_05_07$taux_obj_05_07 < 5])
+```
+
+```{r}
+# Camembert des situations des communes  du bilan
+par(mar = c(0, 0, 2, 0))
+pie(table(co_so_05_07$situation_05_07), init.angle = 90,
+    col = c("lightgreen", "slateblue4", "slateblue1", "oldlace"),
+    labels = c("objectif atteint", "objectif non atteint amende",
+               "objectif non atteint sans amende", "taux atteint"),
+    main = "Situation des communes pour le bilan triennal 2005-2007")
+```
+
+```{r}
+# Les communes ayant un nombre négatifs de constructions
+temp = sqldf("SELECT * FROM co_so_05_07 WHERE taux_obj_05_07 < 0")[,
+    c("code_commune", 'construction_05_07','objectif_05_07', "taux_obj_05_07")]
+
+hist(temp$taux_obj_05_07, col = "antiquewhite1",
+     xlab = "taux de réalisation des objectifs", breaks = 20,
+     main = "Histogramme des réalisations des objectifs triennaux 2005-2007",
+     sub = "pour les communes diminuant leur nombre de LLS")
+```
+
+```{r}
+# Les communes ayant aucune construction
+sqldf("SELECT code_commune FROM co_so_05_07 WHERE construction_05_07 = 0")$code_commune
+```
+
+```{r}
+# les communes ayant construits sans atteindre leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_05_07 
+              WHERE taux_obj_05_07 > 0 AND taux_obj_05_07 <1")
+
+hist(temp$taux_obj_05_07, breaks = 20, col = 'antiquewhite',
+     main = "Histogramme des réalisations des objectifs triennaux 2005-2007",
+     xlab = "taux de réalisation des objectifs",
+     sub = "pour les communes n'ayant pas atteint leur objectif et ayant un nombre positif de construction")
+```
+
+```{r}
+# les commune ayant exactement atteint leur objectif
+sqldf("SELECT *
+       FROM co_so_05_07
+       WHERE taux_obj_05_07 = 1")
+```
+
+```{r}
+# Les communes ayant construits plus que leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_05_07
+              WHERE taux_obj_05_07 > 1")
+hist(temp$taux_obj_05_07, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2005-2007",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant atteint leur objectif")
+```
+
+
+# Bilan triennal 2008-2010
+```{r}
+# Nombre de communes dans le bilan
+sum(co_so_08_10$code_commune %in% co_so_08_10$code_commune) # 977 communes
+# Statistiques descriptives sur le taux de réalisation de l'objectif
+summary(co_so_08_10$taux_obj_08_10)
+quantile(co_so_08_10$taux_obj_08_10, seq(0, 1, 0.1), na.rm = TRUE) # déciles
+
+sum(is.na(co_so_08_10$objectif_08_10)) # nombre de communes sans objectif
+sum(is.na(co_so_08_10$construction_08_10)) # nombre de communes sans construction inscrite
+sum(is.na(co_so_08_10$taux_obj_08_10)) # nombre de communes pour lesquelles le taux ne peut pas être calculé
+sum(is.na(co_so_08_10$situation_08_10)) # nombre de communes qui n'ont pas de situation en 2008-2010
+
+# communes pour lesquelles l'objectif du bilan n'est pas définit
+co_so_08_10[is.na(co_so_08_10$objectif_08_10),]$code_commune
+
+# communes ayant un objectif égale à 0
+sqldf("SELECT code_commune, construction_08_10, objectif_08_10
+       FROM co_so_08_10
+       WHERE objectif_08_10 = 0")
+```
+
+```{r}
+# Boxplot des taux de réalisations des objectifs
+boxplot(co_so_08_10$taux_obj_08_10)
+# Histogramme des taux de réalisations des objectifs
+hist(co_so_08_10$taux_obj_08_10)
+# les communes ayant un nombre 
+sqldf("SELECT code_commune, construction_08_10, objectif_08_10, taux_obj_08_10
+       FROM co_so_08_10
+       WHERE taux_obj_08_10 < -1")
+
+boxplot(co_so_08_10$taux_obj_08_10[co_so_08_10$taux_obj_08_10 > -1 & co_so_08_10$taux_obj_08_10 < 20])
+hist(co_so_08_10$taux_obj_08_10[co_so_08_10$taux_obj_08_10 > -1 & co_so_08_10$taux_obj_08_10 < 5])
+```
+
+```{r}
+# Camembert des situations des communes du bilan
+par(mar = c(4, 6, 2, 5))
+pie(table(co_so_08_10$situation_08_10),
+    col = c("lightgreen", "midnightblue", "slateblue4", "slateblue1", "oldlace"),
+    labels = c("objectif atteint", "objectif non atteint sans info amende",
+               "objectif non atteint amende",
+               "objectif non atteint sans amende", "taux atteint"),
+    main = "Situation des communes pour le bilan triennal 2008-2010")
+```
+
+```{r}
+# les communes ayant un nombre négatif de construction
+temp = sqldf("SELECT *
+              FROM co_so_08_10
+              WHERE taux_obj_08_10 < 0")
+hist(temp$taux_obj_08_10, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2008-2010",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant une diminution de LLS")
+temp$code_commune
+```
+"13040" "30351" "62397" "62865" "69052" "94070" "94075" "81257" "97212" "97222" ont un nombre de construction de LLS strictement négatif.
+
+```{r}
+# Les communes ayant 0 construction
+sqldf("SELECT code_commune FROM co_so_08_10 WHERE taux_obj_08_10 = 0")$code_commune
+```
+"01043" "06011" "06054" "31561" "34123" "34247" "37018" "44135" "47209" "59248" "59553" "68300" "72386" "74250" "78367" "78466" "78672" "78683" "83035" "91115" "91275" "91600" "91667" "94065" "95014" "2B037" "78133" "97115" "13033" "13035" "13051" "34324" "62861" "66017" "83141" "97421" "17380" ont 0 construction de LLS dans le bilan triennal 2008-2010.
+
+```{r}
+# Les commune ayant construits sans atteindre leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_08_10
+              WHERE taux_obj_08_10 > 0 AND taux_obj_08_10 < 1")
+hist(temp$taux_obj_08_10, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2008-2010",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes n'ayant pas atteint leur objectif et ayant un nombre positif de construction")
+#temp$code_commune # affichage de ces communes
+```
+
+```{r}
+# les communes ayant exactement atteint leur objectif
+sqldf("SELECT code_commune FROM co_so_08_10 WHERE taux_obj_08_10 = 1")$code_commune
+```
+"01451" "31116" "37273" "54328" "54495" "54578" "62173" "67471" "68155" "73179" "76103" "77040" "77450" "91339" "06075" "44168" "89263" respectent exactement leur objectif pour le bilan 2008-2010.
+
+```{r}
+# les commune ayant construit plus que leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_08_10
+              WHERE taux_obj_08_10 > 1")
+boxplot(temp$taux_obj_08_10, 
+        main = "Boxplot des réalisations des objectifs triennaux 2008-2010",
+        sub = "pour les communes atteignant leur objectif",
+        ylab = "taux de réalisations des objectifs")
+temp[temp$taux_obj_08_10>50,c("code_commune", "construction_08_10",
+                               "objectif_08_10", "taux_obj_08_10", "situation_08_10")]
+hist(temp$taux_obj_08_10[temp$taux_obj_08_10<200], breaks = 100,
+     main = "Histogramme des réalisations des objectifs triennaux 2008-2010",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs",
+     sub = "pour les communes ayant atteint leur objectif sans 3 valeurs extrêmes")
+```
+
+
+# Bilan triennal 2011-2013
+```{r}
+# Nombre de communes dans le bilan
+sum(co_so_11_13$code_commune %in% co_so_11_13$code_commune) # 1021 communes
+# Statistiques descriptives sur le taux de réalisation de l'objectif
+summary(co_so_11_13$taux_obj_11_13)
+quantile(co_so_11_13$taux_obj_11_13, seq(0, 1, 0.1), na.rm = TRUE) # déciles
+
+sum(is.na(co_so_11_13$objectif_11_13)) # nombre de communes sans objectif
+sum(is.na(co_so_11_13$construction_11_13)) # nombre de communes sans construction inscrite
+sum(is.na(co_so_11_13$taux_obj_11_13)) # nombre de communes pour lesquelles le taux ne peut pas être calculé
+sum(is.na(co_so_11_13$situation_11_13)) # nombre de communes qui n'ont pas de situation en 2008-2010
+
+# communes pour lesquelles l'objectif du bilan n'est pas définit
+co_so_11_13[is.na(co_so_11_13$objectif_11_13),c('code_commune', 'construction_11_13')]
+
+# communes ayant un objectif égale à 0
+sqldf("SELECT code_commune, construction_11_13, objectif_11_13, situation_11_13
+       FROM co_so_11_13
+       WHERE objectif_11_13 = 0")
+```
+
+```{r}
+# Boite à moustaches des taux de réalisations des objectifs
+boxplot(co_so_11_13$taux_obj_11_13)
+# Histogramme des taux de réalisations des objectifs
+hist(co_so_11_13$taux_obj_11_13)
+# les communes ayant des valeurs extrêmes
+sqldf("SELECT code_commune, construction_11_13, objectif_11_13, taux_obj_11_13 
+       FROM co_so_11_13
+       WHERE taux_obj_11_13 < -1 OR taux_obj_11_13 > 60")
+
+boxplot(co_so_11_13$taux_obj_11_13[co_so_11_13$taux_obj_11_13 > -1 & co_so_11_13$taux_obj_11_13 < 20])
+hist(co_so_11_13$taux_obj_11_13[co_so_11_13$taux_obj_11_13 > -1 & co_so_11_13$taux_obj_11_13 < 5])
+```
+
+```{r}
+# Situation des communes du bilan
+par(mar = c(4, 4, 2, 2))
+pie(table(co_so_11_13$situation_11_13),
+    col = c("lightgreen", "slateblue", "slateblue4", "slateblue1", "oldlace"),
+    labels = c("objectif atteint", "objectif non atteint sans info amende",
+               "objectif non atteint amende",
+               "objectif non atteint sans amende", "taux atteint"),
+    main = "Situation des communes pour le bilan triennal 2011-2013")
+```
+
+```{r}
+# les commune ayant des nombres de constructions négatifs
+temp = sqldf("SELECT *
+              FROM co_so_11_13 
+              WHERE taux_obj_11_13 < 0")
+hist(temp$taux_obj_11_13, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2011-2013",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant un nombre négatif de construction")
+temp$code_commune
+```
+
+```{r}
+# les communes ayant 0 construction
+sqldf("SELECT code_commune 
+      FROM co_so_11_13 
+      WHERE taux_obj_11_13 = 0 
+      ORDER BY code_commune")$code_commune
+```
+
+```{r}
+# les communes ayant construit sans atteindre leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_11_13 
+              WHERE taux_obj_11_13 > 0 AND taux_obj_11_13 < 1")
+hist(temp$taux_obj_11_13, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2011-2013",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes n'ayant pas atteint leur objectif et ayant un nombre positif de construction")
+temp$code_commune
+```
+
+```{r}
+# les commune ayant exactement atteint leur objectif
+sqldf("SELECT code_commune 
+      FROM co_so_11_13 
+      WHERE taux_obj_11_13 = 1
+      ORDER BY code_commune")$code_commune
+```
+
+```{r}
+# Les communes ayant construit plus que leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_11_13 
+              WHERE taux_obj_11_13 > 1")
+boxplot(temp$taux_obj_11_13, 
+        main = "Boxplot des réalisations des objectifs triennaux 2011-2013",
+        sub = "pour les communes atteignant leur objectif",
+        ylab = "taux de réalisations des objectifs")
+temp[temp$taux_obj_11_13>50,c("code_commune", "construction_11_13",
+                               "objectif_11_13", "taux_obj_11_13", "situation_11_13")]
+hist(temp$taux_obj_11_13[temp$taux_obj_11_13 < 200], breaks = 50,
+     main = "Histogramme des réalisations des objectifs triennaux 2011-2013",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant atteint leur objectif sans 2 valeurs extrêmes")
+# temp$code_commune # affichage des codes de communes
+```
+
+
+# Bilan triennal 2014-2016
+```{r}
+# Nombre de communes dans le bilan
+sum(co_so_14_16$code_commune %in% co_so_14_16$code_commune) # 1001 communes
+
+# communes ayant un objectif égale à 0
+sqldf("SELECT code_commune, construction_14_16, objectif_14_16, situation_14_16
+       FROM co_so_14_16
+       WHERE objectif_14_16 = 0")
+co_so_14_16$taux_obj_14_16[co_so_14_16$code_commune == "22211"] = 0.43 # valeur des données initiales # initialisé ici à Inf
+# Statistiques descriptives sur le taux de réalisation de l'objectif
+summary(co_so_14_16$taux_obj_14_16)
+quantile(co_so_14_16$taux_obj_14_16, seq(0, 1, 0.1), na.rm = TRUE) # déciles
+
+sum(is.na(co_so_14_16$objectif_14_16)) # nombre de communes sans objectif
+sum(is.na(co_so_14_16$construction_14_16)) # nombre de communes sans construction inscrite
+sum(is.na(co_so_14_16$taux_obj_14_16)) # nombre de communes pour lesquelles le taux ne peut pas être calculé
+sum(is.na(co_so_14_16$situation_14_16)) # nombre de communes qui n'ont pas de situation en 2014-2016
+
+# communes pour lesquelles l'objectif du bilan n'est pas définit
+co_so_14_16[is.na(co_so_14_16$objectif_14_16), c('code_commune', 'situation_14_16', 'construction_14_16', 'objectif_14_16')]
+```
+
+```{r}
+# Boxplot des taux de réalisation des objectifs
+boxplot(co_so_14_16$taux_obj_14_16)
+# Histogramme des taux de réalisations des objectifs
+hist(co_so_14_16$taux_obj_14_16)
+# les communes ayant moins de -objectif comme nombre de construction
+sqldf("SELECT code_commune, construction_14_16, objectif_14_16, taux_obj_14_16 
+       FROM co_so_14_16
+       WHERE taux_obj_14_16 < -1")
+
+boxplot(co_so_14_16$taux_obj_14_16[co_so_14_16$taux_obj_14_16 > -1 & co_so_14_16$taux_obj_14_16 < 20])
+hist(co_so_14_16$taux_obj_14_16[co_so_14_16$taux_obj_14_16 > -1 & co_so_14_16$taux_obj_14_16 < 5])
+```
+
+```{r}
+# Camembert des situations des communes du bilan
+par(mar = c(0, 0, 2, 0))
+pie(table(co_so_14_16$situation_14_16), init.angle = 60,
+    col = c("lightgreen", "midnightblue", "slateblue4", "slateblue1", "oldlace"),
+    labels = c("objectif atteint", "objectif non atteint sans info amende",
+               "objectif non atteint amende",
+               "objectif non atteint sans amende", "taux atteint"),
+    main = "Situation des communes pour le bilan triennal 2014-2016")
+```
+
+```{r}
+# les communes ayant un nombre négatif de constructions
+temp = sqldf("SELECT *
+              FROM co_so_14_16 
+              WHERE taux_obj_14_16 < 0")
+hist(temp$taux_obj_14_16, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2014-2016",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant un nombre négatif de construction")
+temp$code_commune
+```
+
+```{r}
+# les communes ayant 0 construction
+sqldf("SELECT code_commune 
+       FROM co_so_14_16 
+       WHERE taux_obj_14_16 = 0
+       ORDER BY code_commune")$code_commune
+```
+
+```{r}
+# les communes ayant construit sans atteindre leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_14_16 
+              WHERE taux_obj_14_16 > 0 AND taux_obj_14_16 < 1")
+hist(temp$taux_obj_14_16, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2014-2016",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes n'ayant pas atteint leur objectif et ayant un nombre positif de construction")
+temp$code_commune
+```
+
+```{r}
+# les commune ayant exactement réalisé leur objectif
+sqldf("SELECT code_commune 
+       FROM co_so_14_16 
+       WHERE taux_obj_14_16 = 1
+       ORDER BY code_commune")$code_commune
+```
+
+```{r}
+# les communes ayant construit plus que leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_14_16 
+              WHERE taux_obj_14_16 > 1")
+hist(temp$taux_obj_14_16, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2014-2016",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant atteint leur objectif")
+temp$code_commune
+```
+
+
+# Bilan triennal 2017-2019
+```{r}
+# nombre de commune dans le bilan
+sum(co_so_17_19$code_commune %in% co_so_17_19$code_commune) # 1034 communes
+
+sum(is.na(co_so_17_19$objectif_17_19)) # nombre de communes sans objectif
+sum(is.na(co_so_17_19$construction_17_19)) # nombre de communes sans construction
+sum(is.na(co_so_17_19$taux_obj_17_19)) # nombre de communes où le taux ne peut pas être calculé
+sum(is.na(co_so_17_19$situation_17_19)) # nombre de commune sans situaion pour le bilan 2017-2019 (doit être 0)
+
+co_so_17_19[co_so_17_19$objectif_17_19 == 0,] # commune avec 0 pour objectif
+
+# Statistiques descriptives sur le taux de réalisation de l'objectif
+summary(co_so_17_19$taux_obj_17_19)
+quantile(co_so_17_19$taux_obj_17_19, seq(0, 1, 0.1), na.rm = TRUE) # déciles
+
+
+# communes pour lesquelles l'objectif du bilan n'est pas définit
+co_so_17_19[is.na(co_so_17_19$objectif_17_19), c('code_commune', 'situation_17_19', 'construction_17_19', 'objectif_17_19')]
+```
+
+```{r}
+# Boite à moustaches des taux de réalisation de l'objectif
+boxplot(co_so_17_19$taux_obj_17_19)
+# Histogramme des taux de réalisation de l'objectif
+hist(co_so_17_19$taux_obj_17_19)
+# les communes ayant moins de -objectif comme nombre de construction
+sqldf("SELECT code_commune, construction_17_19, objectif_17_19, taux_obj_17_19 
+       FROM co_so_17_19
+       WHERE taux_obj_17_19 < -1")
+
+boxplot(co_so_17_19$taux_obj_17_19[co_so_17_19$taux_obj_17_19 > -1 & co_so_17_19$taux_obj_17_19 < 20])
+hist(co_so_17_19$taux_obj_17_19[co_so_17_19$taux_obj_17_19 > -1 & co_so_17_19$taux_obj_17_19 < 5])
+
+plot(co_so_17_19$construction_17_19, co_so_17_19$objectif_17_19)
+```
+
+```{r}
+# Camembert des situations des communes du bilan
+par(mar = c(0, 0, 2, 1))
+pie(table(co_so_17_19$situation_17_19),
+    col = c("lightgreen", "slateblue4", "slateblue1"),
+    labels = c("objectif atteint", "objectif non atteint amende",
+               "objectif non atteint sans amende"),
+    main = "Situation des communes pour le bilan triennal 2017-2019")
+```
+
+```{r}
+# les communes ayant un nombre de construction négatif
+temp = sqldf("SELECT *
+              FROM co_so_17_19
+              WHERE taux_obj_17_19 < 0")
+hist(temp$taux_obj_17_19, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2017-2019",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant un nombre négatif de construction")
+temp$code_commune
+```
+
+```{r}
+# les communes ayant 0 construction
+sqldf("SELECT code_commune 
+       FROM co_so_17_19 
+       WHERE taux_obj_17_19 = 0 
+       ORDER BY code_commune")$code_commune
+```
+
+```{r}
+# les communes ayant construit sans atteindre leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_17_19
+              WHERE taux_obj_17_19 > 0 AND taux_obj_17_19 < 1")
+hist(temp$taux_obj_17_19, breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2017-2019",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes n'ayant pas atteint leur objectif et ayant un nombre positif de construction")
+temp$code_commune
+```
+
+```{r}
+# les communes ayant exactement atteint leur objectif
+sqldf("SELECT code_commune 
+       FROM co_so_17_19 
+       WHERE taux_obj_17_19 = 1
+       ORDER BY code_commune")$code_commune
+```
+
+```{r}
+# les communes ayant construit plus que leur objectif
+temp = sqldf("SELECT *
+              FROM co_so_17_19 
+              WHERE taux_obj_17_19 > 1")
+boxplot(temp$taux_obj_17_19, 
+        main = "Boxplot des réalisations des objectifs triennaux 2017-2019",
+        sub = "pour les communes atteignant leur objectif",
+        ylab = "taux de réalisations des objectifs")
+temp[temp$taux_obj_17_19>50,c("code_commune", "construction_17_19",
+                               "objectif_17_19", "taux_obj_17_19", "situation_17_19")]
+hist(temp$taux_obj_17_19[temp$taux_obj_17_19 < 100], breaks = 30,
+     main = "Histogramme des réalisations des objectifs triennaux 2017-2019",
+     col = 'antiquewhite', xlab = "taux de réalisations des objectifs   ",
+     sub = "pour les communes ayant atteint leur objectif sans 3 valeurs extrêmes")
+temp$code_commune
+```
+
+# Comparaison des situations des communes dans les 6 bilans triennaux
+
+Il faut faire tourner les deux prochaines cellules ensemble.
+```{r}
+df_triennal <-
+sqldf("SELECT *
+              -- code_commune,
+              -- situation_02_04, construction_02_04, objectif_02_04,
+              -- situation_05_07, construction_05_07, objectif_05_07,
+              -- situation_08_10, construction_08_10, objectif_08_10,
+              -- situation_11_13, construction_11_13, objectif_11_13,
+              -- situation_14_16, construction_14_16, objectif_14_16,
+              -- situation_17_19, construction_17_19, objectif_17_19
+        FROM df
+        WHERE code_commune IN toutes_communes
+      ;")
+attach(df_triennal)
+```
+
+Pour les communes qui n'apparaissent pas dans tous les bilans, on va changer leur valeur de situation dans les bilans où elles n'apparaissent pas en fonction de la raison si elle existe. Une commune n'apparaissant pas dans le bilan aura pour nouvelle situation la valeur "Non soumise" suivie de la raison pour laquelle elle n'apparait pas dans le bilan triennal si cette raison est explicitée dans les bilans annuels.
+```{r}
+a = 0
+# Pour chaque commune
+for (i in 1:length(code_commune)){
+  
+  # Bilan triennal 2002-2004
+  if (is.na(df_triennal[i, "situation_02_04"])){ # La commune n'apparait pas dans le bilan
+    if (is.na(df_triennal[i, "taux_ls_04"]) == 0){
+      if (situation_04[i] == "Non soumise sous seuil pop" |
+          situation_04[i] == "Non soumise atteint taux légal" |
+          situation_04[i] == "Non soumise exemptée"){
+        situation_02_04[i] = situation_04[i]
+      } else {
+        situation_02_04[i] = "Non soumise"
+      }
+    } else {
+      situation_02_04[i] = "Non soumise"
+    }
+  }
+  # Bilan triennal 2005-2007
+  if (is.na(df_triennal[i, "situation_05_07"])){ # La commune n'apparait pas dans le bilan
+    if (is.na(df_triennal[i, "taux_ls_07"]) == 0){ # La commune apparait dans le bilan annuel 2007
+      situation_05_07[i] = "Non soumise"
+    } else if (is.na(df_triennal[i, "taux_ls_06"]) == 0){ # La commune apparait dans le bilan annuel 2006
+      if (situation_06[i] == "Non soumise atteint taux légal" |
+          situation_06[i] == "Non soumise sous seuil pop" |
+          situation_06[i] == "Non soumise exemptée"){
+        situation_05_07[i] = situation_06[i]
+      } else{
+          situation_05_07[i] = "Non soumise"
+        }
+      } else {
+      situation_05_07[i] = "Non soumise"
+    }
+  }
+  # Bilan triennal 2008-2010
+  if (is.na(df_triennal[i, "situation_08_10"])){ # La commune n'apparait pas dans le bilan
+    if (is.na(df_triennal[i, "taux_ls_10"]) == 0){ # La commune apparait dans le bilan annuel 2010
+      if (situation_10[i] == "Non soumise sous seuil pop" |
+          situation_10[i] == "Non soumise exemptée" |
+          situation_10[i] == "Non soumise atteint taux légal"){
+        situation_08_10[i] = situation_10[i]
+      } else {
+        situation_08_10[i] = "Non soumise"
+      }
+    } else {
+      situation_08_10[i] = "Non soumise"
+    }
+  }
+  # Bilan triennal 2011-2013
+  if (is.na(df_triennal[i, "situation_11_13"])){ # La commune n'apparait pas dans le bilan
+    if (is.na(df_triennal[i, "taux_ls_13"]) == 0){ # La commune apparait dans le bilan annuel 2013
+      if (situation_13[i] == "Non soumise sous seuil pop" |
+          situation_13[i] == "Non soumise atteint taux légal" |
+          situation_13[i] == "Non soumise exemption"){
+        situation_11_13[i] = situation_13[i]
+      } else {
+        situation_11_13[i] = "Non soumise"
+      }
+    } else {
+      situation_11_13[i] = "Non soumise" # valeur par défaut : "Non soumise"
+    }
+  }
+  # Bilan triennal 2014-2016
+  if (is.na(df_triennal[i, "situation_14_16"])){ # La commune n'apparait pas dans le bilan
+    if (is.na(df_triennal[i, "taux_ls_16"]) == 0){ # La commune apparait dans le bilan 2016
+      # Dans le bilan 2016, les situation des communes non soumises sont 
+      # seulement "Non soumise" donc on regarde juste si le taux 0.25 est atteint 
+      # cependant il faut se souvenir que le taux à atteindre pour certaines
+      # communes est 0.2.
+      if (taux_ls_16[i] >= 0.25){
+        situation_14_16[i] = "Non soumise atteint taux légal"
+      } else {
+        if (is.na(df_triennal[i, "taux_ls_15"]) == 0) {# La commune apparait dans le bilan 2015
+          if (situation_15[i] == "Non soumise atteint taux légal" |
+              situation_15[i] == "Non soumise sous seuil pop" |
+              situation_15[i] == "Non soumise exemptée"){
+            situation_14_16[i] = situation_15[i]
+          } else {
+            situation_14_16[i] = "Non soumise" # valeur par défaut : "Non soumise"
+          }
+        }
+      }
+    } else {
+      situation_14_16[i] = "Non soumise" # valeur par défaut : "Non soumise"
+    }
+  }
+  # Bilan triennal 2017-2019
+  if (is.na(df_triennal[i, "situation_17_19"])){ # La commune n'apparait pas dans le bilan
+    if (is.na(df_triennal[i, "taux_ls_19"]) == 0){ # La commune apparait dans le bilan 2019
+      # Si on sait pourquoi la commune n'est pas soumise
+      if (situation_19[i] == "Non soumise atteint taux légal" |
+          situation_19[i] == "Non soumise sous seuil pop" |
+          situation_19[i] == "Non soumise exemptée"){
+        situation_17_19[i] = situation_19[i]
+      } else {
+        situation_17_19[i] = "Non soumise" # valeur par défaut : "Non soumise"
+      }
+    } else {
+      situation_17_19[i] = "Non soumise" # valeur par défaut : "Non soumise"
+    }
+  }
+  }
+  # print(a)
+```
+
+```{r}
+# Combien de communes dans chaque situation ?
+table(situation_17_19)
+table(situation_14_16)
+table(situation_11_13)
+table(situation_08_10)
+table(situation_05_07)
+table(situation_02_04)
+```
+
+
+```{r}
+# Camemberts des situations pour tous les bilans triennaux
+layout(matrix(c(1,2,3,4,5,6,7,7,7), ncol = 3, byrow = TRUE))
+
+par(mai = rep(0.5, 4), mar = c(1,1,1,1))
+pie(table(df_triennal$situation_02_04), main = "Bilan 2002-2004",
+    labels = NA, # 'Non soumise', 'Non soumise taux atteint', 'Objectif atteint',
+                 # "Objectif non atteint amende", "Objectif non atteint sans amende",
+                 # "Taux atteint"),
+    col = c('white', 'cornflowerblue', 'mediumseagreen', 'darkred', 'violetred', 
+            'deepskyblue3'),
+    init.angle = 190, radius = 1)
+pie(table(df_triennal$situation_05_07), main = "Bilan 2005-2007",
+    labels = NA, # c('Non soumise', 'Objectif atteint', "Objectif non atteint amende", 
+                 # "Objectif non atteint sans amende", "Taux atteint"),
+    col = c('white', 'mediumseagreen', 'darkred', 'violetred', 'deepskyblue3'),
+    init.angle = 180, radius = 1)
+pie(table(df_triennal$situation_08_10), main = "Bilan 2008-2010",
+    labels = NA, # c("Non soumise", "Non soumise taux atteint", "Objectif atteint", 
+                 # "Objectif non atteint (sans info amende)", 
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint sans amende", "Taux atteint"),
+    col = c('white', 'cornflowerblue', 'mediumseagreen', 'coral3', 'darkred', 
+            'violetred', 'deepskyblue3'),
+    init.angle = 180, radius = 1)
+pie(table(df_triennal$situation_11_13), main = "Bilan 2011-2013",
+    labels = NA, # c("Non soumise", "Non soumise taux atteint", "Objectif atteint", 
+                 # "Objectif non atteint (sans info amende)", 
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint sans amende", "Taux atteint"),
+    col = c('white', 'cornflowerblue', 'mediumseagreen', 'coral3', 'darkred', 
+            'violetred', 'deepskyblue3'),
+    init.angle = 180, radius = 1)
+pie(table(df_triennal$situation_14_16), main = "Bilan 2014-2016",
+    labels = NA, # c("Non soumise", "Non soumise taux atteint", "Objectif atteint",
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint amende sans amende", "Taux atteint"),
+    col = c('white', 'cornflowerblue', 'mediumseagreen', 'darkred', 'violetred',
+            'deepskyblue3'),
+    init.angle = 180, radius = 1)
+pie(table(df_triennal$situation_17_19), main = "Bilan 2017-2019",
+    labels = NA, #c("Non soumise", "Non soumise taux atteint", "Objectif atteint",
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint amende sans amende"),
+    col = c('white', 'cornflowerblue', 'mediumseagreen', 'darkred', 'violetred'),
+    init.angle = 180, radius = 1)
+
+par(mai=c(0,0,0,0))
+plot.new()
+legend('center', 
+       legend = c("Non soumise", "Non soumise taux atteint", "Objectif atteint", 
+                  "Objectif non atteint (sans info amende)", 
+                  "Objectif non atteint amende", 
+                  "Objectif non atteint sans amende", "Taux atteint"),
+       fill = c('white', 'cornflowerblue', 'mediumseagreen', 'coral3', 'darkred', 
+            'violetred', 'deepskyblue3'))
+title(main = "Situations des communes pour chaque bilan triennal", line = -1)
+```
+
+
+```{r}
+# Camemberts des situations pour tous les bilans triennaux
+layout(matrix(c(1,2,3,4,5,6,7,7,7), ncol = 3, byrow = TRUE))
+
+par(mai = rep(0.5, 4), mar = c(1,1,1,1))
+pie(table(situation_02_04), main = "Bilan 2002-2004",
+    labels = NA, # 'Non soumise', 'Non soumise taux atteint', 'Objectif atteint',
+                 # "Objectif non atteint amende", "Objectif non atteint sans amende",
+                 # "Taux atteint"),
+    col = c('white', 'lightskyblue1', 'lightgoldenrodyellow', 'linen', 
+            'limegreen', 'darkred', 'red', 'dodgerblue3'),
+    init.angle = 0, radius = 1)
+pie(table(situation_05_07), main = "Bilan 2005-2007",
+    labels = NA, # c('Non soumise', 'Objectif atteint', "Objectif non atteint amende", 
+                 # "Objectif non atteint sans amende", "Taux atteint"),
+    col = c('white', 'lightskyblue1', 'lightgoldenrodyellow', 'linen', 
+            'limegreen', 'darkred', 'red', 'dodgerblue3'),
+    init.angle = 0, radius = 1)
+pie(table(situation_08_10), main = "Bilan 2008-2010",
+    labels = NA, # c("Non soumise", "Non soumise taux atteint", "Objectif atteint", 
+                 # "Objectif non atteint (sans info amende)", 
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint sans amende", "Taux atteint"),
+    col = c('white', 'lightskyblue1', 'lightgoldenrodyellow', 'linen', 
+            'limegreen', 'indianred', 'darkred', 'red', 'dodgerblue3'),
+    init.angle = 0, radius = 1)
+pie(table(situation_11_13), main = "Bilan 2011-2013",
+    labels = NA, # c("Non soumise", "Non soumise taux atteint", "Objectif atteint", 
+                 # "Objectif non atteint (sans info amende)", 
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint sans amende", "Taux atteint"),
+    col = c('white', 'lightskyblue1', 'lightgoldenrodyellow', 'linen', 
+            'limegreen', 'indianred', 'darkred', 'red', 'dodgerblue3'),
+    init.angle = 0, radius = 1)
+pie(table(situation_14_16), main = "Bilan 2014-2016",
+    labels = NA, # c("Non soumise", "Non soumise taux atteint", "Objectif atteint",
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint amende sans amende", "Taux atteint"),
+    col = c('white', 'lightskyblue1', 'lightgoldenrodyellow', 'linen', 
+            'limegreen', 'darkred', 'red', 'dodgerblue3'),
+    init.angle = 0, radius = 1)
+pie(table(situation_17_19), main = "Bilan 2017-2019",
+    labels = NA, #c("Non soumise", "Non soumise taux atteint", "Objectif atteint",
+                 # "Objectif non atteint amende", 
+                 # "Objectif non atteint amende sans amende"),
+    col = c('white', 'lightskyblue1', 'lightgoldenrodyellow', 'linen', 
+            'limegreen', 'darkred', 'red'),
+    init.angle = 0, radius = 1)
+
+par(mai=c(0,0,0,0))
+plot.new()
+legend('center', 
+       legend = c("Taux atteint", "Objectif atteint", 
+                  "Objectif non atteint amende", 
+                  "Objectif non atteint sans amende", 
+                  "Objectif non atteint (sans info amende)", 
+                  "Non soumise", "Non soumise taux atteint", 
+                  "Non soumise sous seuil pop", "Non soumise exemptée"),
+       fill = c('dodgerblue3', 'limegreen', 'darkred', 'red', 'indianred',
+                'white', 'lightskyblue1', 'linen', 'lightgoldenrodyellow'),
+       ncol = 2)
+title(main = "Situations des communes pour chaque bilan triennal", line = -1)
+```
+
+
+```{r}
+tab_1_2 = table(situation_02_04, situation_05_07)
+print(tab_1_2)
+chisq.test(tab_1_2)
+```
+
+```{r}
+tab_1_3 = table(situation_02_04, situation_08_10)
+chisq.test(tab_1_3)
+```
+
+```{r}
+tab_1_4 = table(situation_02_04, situation_11_13)
+chisq.test(tab_1_4)
+```
+
+```{r}
+tab_1_5 = table(situation_02_04, situation_14_16)
+chisq.test(tab_1_5)
+```
+
+```{r}
+tab_1_6 = table(situation_02_04, situation_17_19)
+print(tab_1_6)
+chisq.test(tab_1_6)
+```
+
+```{r}
+df_triennal[df_triennal$situation_02_04 == "Soumise taux atteint en 2004",
+            c("code_commune", "situation_02_04", "situation_05_07",
+              "situation_08_10", "situation_11_13", "situation_14_16",
+              "situation_17_19")]
+```
+
+```{r}
+df_triennal[df_triennal$situation_05_07 == "Soumise taux atteint en 2007",
+            c("code_commune", "situation_02_04", "situation_05_07",
+              "situation_08_10", "situation_11_13", "situation_14_16",
+              "situation_17_19")]
+```
+
+```{r}
+df_triennal[df_triennal$situation_08_10 == "Soumise taux atteint en 2010",
+            c("code_commune", "situation_02_04", "situation_05_07",
+              "situation_08_10", "situation_11_13", "situation_14_16",
+              "situation_17_19")]
+```
+
+```{r}
+sqldf("SELECT situation_02_04, situation_05_07, situation_08_10, 
+              situation_11_13, situation_14_16, situation_17_19,
+              COUNT(code_commune)
+       FROM df_triennal
+       GROUP BY situation_02_04, situation_05_07, situation_08_10, 
+                situation_11_13, situation_14_16, situation_17_19")
+```
+
+## taux de LLS pour les communes construisant sans atteindre leurs objectifs
+```{r}
+# taux de LLS à la fin des bilans
+boxplot(co_so_02_04$taux_ls_06[co_so_02_04$taux_obj_02_04 > 0 & 
+                               co_so_02_04$taux_obj_02_04 < 1],
+        co_so_05_07$taux_ls_09[co_so_05_07$taux_obj_05_07 > 0 &
+                               co_so_05_07$taux_obj_05_07 <1],
+        co_so_08_10$taux_ls_12[co_so_08_10$taux_obj_08_10 > 0 & 
+                               co_so_08_10$taux_obj_08_10 < 1],
+        co_so_11_13$taux_ls_15[co_so_11_13$taux_obj_11_13 > 0 & 
+                               co_so_11_13$taux_obj_11_13 < 1],
+        co_so_14_16$taux_ls_18[co_so_14_16$taux_obj_14_16 > 0 & 
+                               co_so_14_16$taux_obj_14_16 < 1],
+        co_so_17_19$taux_ls_21[co_so_17_19$taux_obj_17_19 > 0 & 
+                               co_so_17_19$taux_obj_17_19 < 1],
+        main = "Boxplots des taux de logements sociaux",
+        ylab = "taux de logement locatif social",
+        names = c("2004", "2007", "2010", "2013", "2016", "2019"),
+        xlab = "années de fin des bilans triennaux", pch = 20)
+```
+
+```{r}
+co_so_11_13[co_so_11_13$taux_obj_11_13 > 0 & co_so_11_13$taux_obj_11_13 < 1 &
+            co_so_11_13$taux_ls_14 > 0.2 & is.na(co_so_11_13$taux_ls_14) == 0,]
+```
+
+La commune 31149 (Colomiers) n'est pas soumise à la loi SRU car elle atteint le taux seuil de logements sociaux entre 2011 et 2013 (et même entre 2004 et 2021) donc elle ne devrait pas apparaître dans le bilan triennal 2011-2013 et encore moins avoir un objectif fixé au-dessus de 0 construction de logement social.
+
+
+```{r}
+# Taux de logements sociaux au début des bilans
+boxplot(co_so_05_07$taux_ls_06[co_so_05_07$taux_obj_05_07 > 0 &
+                               co_so_05_07$taux_obj_05_07 <1],
+        co_so_08_10$taux_ls_09[co_so_08_10$taux_obj_08_10 > 0 & 
+                               co_so_08_10$taux_obj_08_10 < 1],
+        co_so_11_13$taux_ls_12[co_so_11_13$taux_obj_11_13 > 0 & 
+                               co_so_11_13$taux_obj_11_13 < 1],
+        co_so_14_16$taux_ls_15[co_so_14_16$taux_obj_14_16 > 0 & 
+                               co_so_14_16$taux_obj_14_16 < 1],
+        co_so_17_19$taux_ls_18[co_so_17_19$taux_obj_17_19 > 0 & 
+                               co_so_17_19$taux_obj_17_19 < 1],
+        main = "Boxplots des taux de logements sociaux",
+        ylab = "taux de logement locatif social",
+        names = c("2005", "2008", "2011", "2014", "2017"),
+        xlab = "années de début des bilans triennaux", pch = 20)
+```
+
+## Tailles des communes
+```{r}
+boxplot(co_so_02_04$POP99[co_so_02_04$taux_obj_02_04 > 0 & 
+                               co_so_02_04$taux_obj_02_04 < 1],
+        co_so_05_07$POP06[co_so_05_07$taux_obj_05_07 > 0 &
+                               co_so_05_07$taux_obj_05_07 <1],
+        co_so_08_10$POP08[co_so_08_10$taux_obj_08_10 > 0 & 
+                               co_so_08_10$taux_obj_08_10 < 1],
+        co_so_11_13$POP11[co_so_11_13$taux_obj_11_13 > 0 & 
+                               co_so_11_13$taux_obj_11_13 < 1],
+        co_so_14_16$POP14[co_so_14_16$taux_obj_14_16 > 0 & 
+                               co_so_14_16$taux_obj_14_16 < 1],
+        co_so_17_19$POP17[co_so_17_19$taux_obj_17_19 > 0 & 
+                               co_so_17_19$taux_obj_17_19 < 1],
+        main = "Boxplots des tailles des communes",
+        ylab = "population des communes",
+        names = c("2002-04", "2005-07", "2008-10", "2011-13", 
+                  "2014-16", "2017-19"),
+        xlab = "bilans triennaux", pch = 20, log = "y")
+```
+
+```{r}
+# quelles sont les plus grandes communes n'ateignant par leurs objectifs ?
+co_so_02_04[co_so_02_04$taux_obj_02_04 > 0 & co_so_02_04$taux_obj_02_04 < 1 &
+            co_so_02_04$POP99>100000,]
+co_so_05_07[co_so_05_07$taux_obj_05_07 > 0 & co_so_05_07$taux_obj_05_07 < 1 &
+            co_so_05_07$POP06>100000,]
+co_so_08_10[co_so_08_10$taux_obj_08_10 > 0 & co_so_08_10$taux_obj_08_10 < 1 &
+            co_so_08_10$POP09>100000,]
+co_so_11_13[co_so_11_13$taux_obj_11_13 > 0 & co_so_11_13$taux_obj_11_13 < 1 &
+            co_so_11_13$POP12>100000,]
+co_so_14_16[co_so_14_16$taux_obj_14_16 > 0 & co_so_14_16$taux_obj_14_16 < 1 &
+            co_so_14_16$POP15>100000,]
+co_so_17_19[co_so_17_19$taux_obj_17_19 > 0 & co_so_17_19$taux_obj_17_19 < 1 &
+            co_so_17_19$POP17>100000,]
+```
+
+La plus grande commune n'atteignant pas toujours ses objectifs triennaux est Nice (06088). Cette commune n'atteint pas les objectifs des bilans triennaux 2002-2004, 2005-2006, 2011-2013, 2014-1016 et 2017-2019. Ensuite, il y a Toulon (83137) qui n'atteint pas ses objectifs pour les bilans triennaux 2005-2007, 2008-2010, 2014-2016 et 2017-2019.
+
+On peut voir que des communes qui n'atteignent pas leurs objectifs dans un bilan triennal ont souvent d'autres bilans triennaux pour lesquels elles n'atteignent pas les objectifs.
+
+
+## Taux de LLS pour toutes les communes des bilans
+```{r}
+# Taux de LS pour toutes les communes
+boxplot(co_so_02_04$taux_ls_04,
+        co_so_05_07$taux_ls_06,
+        co_so_08_10$taux_ls_09,
+        co_so_11_13$taux_ls_12,
+        co_so_14_16$taux_ls_15,
+        co_so_17_19$taux_ls_18,
+        main = "Boxplots des taux de LS aux débuts des bilans triennaux",
+        ylab = "taux de LS des communes",
+        names = c("2002", "2005", "2008", "2011", "2014", "2017"),
+        xlab = "première année des bilans triennaux", pch = 20)
+```
+
+```{r}
+co_so_02_04[co_so_02_04$taux_ls_04 > 0.5 &
+            is.na(co_so_02_04$taux_ls_04) == 0,]
+```
